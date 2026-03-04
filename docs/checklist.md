@@ -8,26 +8,26 @@ Track progress phase by phase. Check items off as completed.
 **Goal**: Auth works, all models migrated, admin seeded, CI passes, factories create valid test data.
 
 ### Project Setup
-- [x] Django 5.2 project scaffolded (`scope_manager/`)
-- [x] All 7 apps created: `core`, `projects`, `exhibits`, `notes`, `reviews`, `ai_services`, `exports`
-- [x] Settings configured: PostgreSQL, django-allauth, WhiteNoise, Tailwind CDN, AI feature flag
-- [x] `.env.example` created
-- [x] `develop` branch created; branch strategy established
+- [x] Django 5.2 project scaffolded (`scope_manager/`) *(2026-03-03)*
+- [x] All 7 apps created: `core`, `projects`, `exhibits`, `notes`, `reviews`, `ai_services`, `exports` *(2026-03-03)*
+- [x] Settings configured: PostgreSQL, django-allauth, WhiteNoise, Tailwind CDN, AI feature flag *(2026-03-03)*
+- [x] `.env.example` created *(2026-03-03)*
+- [x] `develop` branch created; branch strategy established *(2026-03-03)*
 
 ### Data Models
-- [x] `core`: Company, User (email-based, role field), ProjectType, CSITrade
-- [x] `projects`: Project, Trade (status workflow, unique constraint)
-- [x] `exhibits`: ScopeExhibit, ExhibitSection, ScopeItem (hierarchical: parent FK + level + order)
-- [x] `notes`: Note (cross-trade M2M, resolution workflow)
-- [x] `reviews`: ChecklistItem, FinalReview, FinalReviewItem
-- [x] All migrations generated and applied cleanly
+- [x] `core`: Company, User (email-based, role field), ProjectType, CSITrade *(2026-03-03)*
+- [x] `projects`: Project, Trade (status workflow, unique constraint) *(2026-03-03)*
+- [x] `exhibits`: ScopeExhibit, ExhibitSection, ScopeItem (hierarchical: parent FK + level + order) *(2026-03-03)*
+- [x] `notes`: Note (cross-trade M2M, resolution workflow) *(2026-03-03)*
+- [x] `reviews`: ChecklistItem, FinalReview, FinalReviewItem *(2026-03-03)*
+- [x] All migrations generated and applied cleanly *(2026-03-03)*
 
 ### Django Admin
-- [x] `core` admin: Company, User, ProjectType, CSITrade registered
-- [x] `projects` admin: Project, Trade registered
-- [x] `exhibits` admin: ScopeExhibit, ExhibitSection, ScopeItem registered
-- [x] `notes` admin: Note registered
-- [x] `reviews` admin: ChecklistItem, FinalReview, FinalReviewItem registered
+- [x] `core` admin: Company, User, ProjectType, CSITrade registered *(2026-03-03)*
+- [x] `projects` admin: Project, Trade registered *(2026-03-03)*
+- [x] `exhibits` admin: ScopeExhibit, ExhibitSection, ScopeItem registered *(2026-03-03)*
+- [x] `notes` admin: Note registered *(2026-03-03)*
+- [x] `reviews` admin: ChecklistItem, FinalReview, FinalReviewItem registered *(2026-03-03)*
 
 ### Seed Data
 - [ ] Management command: seed CSI trades (priority trades: Mechanical, Electrical, Plumbing, Fire Sprinkler, Drywall, Doors + full list)
