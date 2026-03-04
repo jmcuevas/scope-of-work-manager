@@ -30,8 +30,8 @@ Track progress phase by phase. Check items off as completed.
 - [x] `reviews` admin: ChecklistItem, FinalReview, FinalReviewItem registered *(2026-03-03)*
 
 ### Seed Data
-- [ ] Management command: seed CSI trades (priority trades: Mechanical, Electrical, Plumbing, Fire Sprinkler, Drywall, Doors + full list)
-- [ ] Management command: seed project types (Office TI, Lab TI, Core & Shell, Seismic Retrofit, Mixed-Use, Other)
+- [x] Management command: seed CSI trades (priority trades: Mechanical, Electrical, Plumbing, Fire Sprinkler, Drywall, Doors + full list) *(2026-03-03)*
+- [x] Management command: seed project types (Office TI, Lab TI, Core & Shell, Seismic Retrofit, Mixed-Use, Other) *(2026-03-03)*
 
 ### Testing Infrastructure
 - [ ] `pytest.ini` configured (Django settings, test DB)
