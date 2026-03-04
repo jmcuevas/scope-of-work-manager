@@ -23,11 +23,11 @@ Track progress phase by phase. Check items off as completed.
 - [x] All migrations generated and applied cleanly
 
 ### Django Admin
-- [ ] `core` admin: Company, User, ProjectType, CSITrade registered
-- [ ] `projects` admin: Project, Trade registered
-- [ ] `exhibits` admin: ScopeExhibit, ExhibitSection, ScopeItem registered
-- [ ] `notes` admin: Note registered
-- [ ] `reviews` admin: ChecklistItem, FinalReview, FinalReviewItem registered
+- [x] `core` admin: Company, User, ProjectType, CSITrade registered
+- [x] `projects` admin: Project, Trade registered
+- [x] `exhibits` admin: ScopeExhibit, ExhibitSection, ScopeItem registered
+- [x] `notes` admin: Note registered
+- [x] `reviews` admin: ChecklistItem, FinalReview, FinalReviewItem registered
 
 ### Seed Data
 - [ ] Management command: seed CSI trades (priority trades: Mechanical, Electrical, Plumbing, Fire Sprinkler, Drywall, Doors + full list)
