@@ -34,10 +34,10 @@ Track progress phase by phase. Check items off as completed.
 - [x] Management command: seed project types (Office TI, Lab TI, Core & Shell, Seismic Retrofit, Mixed-Use, Other) *(2026-03-03)*
 
 ### Testing Infrastructure
-- [ ] `pytest.ini` configured (Django settings, test DB)
-- [ ] `conftest.py` with shared fixtures
-- [ ] Factory Boy factories for every model
-- [ ] Model constraint tests (unique trade per project, email uniqueness, etc.)
+- [x] `pytest.ini` configured (Django settings, test DB) *(2026-03-04)*
+- [x] `conftest.py` with shared fixtures *(2026-03-04)*
+- [x] Factory Boy factories for every model *(2026-03-04)*
+- [x] Model constraint tests (unique trade per project, email uniqueness, etc.) *(2026-03-04)*
 
 ### Base Template
 - [ ] `templates/base.html`: nav, flash messages, content block
