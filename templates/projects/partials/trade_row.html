@@ -1,0 +1,25 @@
+{% load trade_tags %}
+<tr class="hover:bg-gray-50 transition-colors" id="trade-{{ trade.pk }}">
+  <td class="px-5 py-3 text-gray-500 font-mono text-xs">{{ trade.csi_trade.csi_code }}</td>
+  <td class="px-5 py-3 font-medium text-gray-800">{{ trade.csi_trade.name }}</td>
+  <td class="px-5 py-3 text-right text-gray-600">
+    {% if trade.budget %}${{ trade.budget|floatformat:0 }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+  </td>
+  <td class="px-5 py-3">
+    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{ trade.status|status_badge_class }}">
+      {{ trade.get_status_display }}
+    </span>
+  </td>
+  <td class="px-5 py-3 text-gray-500 text-sm">
+    {% if trade.assigned_to %}
+      {{ trade.assigned_to.get_full_name|default:trade.assigned_to.email }}
+    {% else %}
+      <span class="text-gray-300">Unassigned</span>
+    {% endif %}
+  </td>
+  <td class="px-5 py-3 text-right">
+    <a href="#" class="text-primary-600 hover:text-primary-800 text-xs font-medium transition-colors">
+      Open Scope →
+    </a>
+  </td>
+</tr>

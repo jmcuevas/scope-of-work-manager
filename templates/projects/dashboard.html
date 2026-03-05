@@ -1,4 +1,126 @@
 {% extends "base.html" %}
+
+{% block title %}{{ project.name }} — Scope Manager{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'projects:list' %}" class="hover:text-gray-700">Projects</a>
+  <span class="mx-2">/</span>
+  {{ project.name }}
+{% endblock %}
+
+{% block sidebar %}
+  <a href="{% url 'projects:list' %}"
+     class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-500 hover:bg-gray-50 text-sm transition-colors mb-3">
+    ← Projects
+  </a>
+
+  <div class="px-3 py-2 mb-2">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Current Project</p>
+    <p class="text-sm font-medium text-gray-800">{{ project.name }}</p>
+    {% if project.number %}
+      <p class="text-xs text-gray-400">{{ project.number }}</p>
+    {% endif %}
+  </div>
+
+  <div class="border-t border-gray-100 pt-3 mt-1">
+    <a href="{% url 'projects:dashboard' project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-primary-700 bg-primary-50 font-medium text-sm">
+      Buyout Dashboard
+    </a>
+    <a href="{% url 'projects:edit' project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors mt-1">
+      Edit Project
+    </a>
+  </div>
+{% endblock %}
+
 {% block content %}
-<p class="text-gray-500">Dashboard coming soon — {{ project.name }}</p>
+<div class="max-w-5xl">
+
+  <!-- Page header -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-semibold text-gray-800">Buyout Dashboard</h1>
+      <p class="text-sm text-gray-500 mt-0.5">
+        {{ project.project_type }}{% if project.address %} · {{ project.address }}{% endif %}
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      <a href="{% url 'projects:trade_import' project.pk %}"
+         class="px-4 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-lg transition-colors">
+        Import Trades
+      </a>
+      <a href="{% url 'projects:trade_add' project.pk %}"
+         class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors">
+        + Add Trade
+      </a>
+    </div>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="grid grid-cols-5 gap-3 mb-6">
+    {% with counts=status_counts %}
+    <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+      <p class="text-2xl font-semibold text-gray-800">{{ total_trades }}</p>
+      <p class="text-xs text-gray-500 mt-0.5">Total</p>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+      <p class="text-2xl font-semibold text-gray-500">{{ counts.NOT_STARTED }}</p>
+      <p class="text-xs text-gray-500 mt-0.5">Not Started</p>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+      <p class="text-2xl font-semibold text-blue-600">{{ counts.SCOPE_IN_PROGRESS }}</p>
+      <p class="text-xs text-gray-500 mt-0.5">In Progress</p>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+      <p class="text-2xl font-semibold text-yellow-600">{{ counts.OUT_TO_BID }}</p>
+      <p class="text-xs text-gray-500 mt-0.5">Out to Bid</p>
+    </div>
+    <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+      <p class="text-2xl font-semibold text-green-600">{{ counts.SUBCONTRACT_ISSUED }}</p>
+      <p class="text-xs text-gray-500 mt-0.5">Subcontract Issued</p>
+    </div>
+    {% endwith %}
+  </div>
+
+  <!-- Trades table -->
+  {% if trades %}
+  <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th class="text-left px-5 py-3 font-medium text-gray-600">CSI Code</th>
+          <th class="text-left px-5 py-3 font-medium text-gray-600">Trade</th>
+          <th class="text-right px-5 py-3 font-medium text-gray-600">Budget</th>
+          <th class="text-left px-5 py-3 font-medium text-gray-600">Status</th>
+          <th class="text-left px-5 py-3 font-medium text-gray-600">Assigned To</th>
+          <th class="px-5 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100" id="trades-table">
+        {% for trade in trades %}
+        {% include "projects/partials/trade_row.html" with trade=trade %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% else %}
+  <!-- Empty state -->
+  <div class="bg-white rounded-lg border border-gray-200 border-dashed py-16 text-center">
+    <p class="text-gray-400 text-sm mb-4">No trades yet. Import from your estimate or add them manually.</p>
+    <div class="flex items-center justify-center gap-3">
+      <a href="{% url 'projects:trade_import' project.pk %}"
+         class="px-4 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-lg transition-colors">
+        Import Trades
+      </a>
+      <a href="{% url 'projects:trade_add' project.pk %}"
+         class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors">
+        + Add Trade
+      </a>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
 {% endblock %}

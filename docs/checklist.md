@@ -55,18 +55,18 @@ Track progress phase by phase. Check items off as completed.
 - [x] "New Project" button *(2026-03-04)*
 
 ### Project Create & Edit
-- [ ] `ProjectForm` (ModelForm): name, number, project_type, description, address
-- [ ] Project create view + template
-- [ ] Project edit view + template
-- [ ] Form validation and inline error display
-- [ ] Success redirect to buyout dashboard after create; back to dashboard after edit
+- [x] `ProjectForm` (ModelForm): name, number, project_type, description, address *(2026-03-04)*
+- [x] Project create view + template *(2026-03-04)*
+- [x] Project edit view + template *(2026-03-04)*
+- [x] Form validation and inline error display *(2026-03-04)*
+- [x] Success redirect to buyout dashboard after create; back to dashboard after edit *(2026-03-04)*
 
 ### Buyout Dashboard
-- [ ] Dashboard view: loads project + all trades, company-scoped
-- [ ] Stats bar: total trades + count per status (Not Started, In Progress, Out to Bid, etc.)
-- [ ] Trades table: CSI code, trade name, budget, status dropdown, assigned PE, link to scope editor (placeholder for now)
-- [ ] Empty state when no trades yet
-- [ ] "Import Trades" and "Add Trade" buttons visible on dashboard
+- [x] Dashboard view: loads project + all trades, company-scoped *(2026-03-04)*
+- [x] Stats bar: total trades + count per status (Not Started, In Progress, Out to Bid, etc.) *(2026-03-04)*
+- [x] Trades table: CSI code, trade name, budget, status badge, assigned PE, link to scope editor (placeholder) *(2026-03-04)*
+- [x] Empty state when no trades yet *(2026-03-04)*
+- [x] "Import Trades" and "Add Trade" buttons visible on dashboard *(2026-03-04)*
 
 ### Trade Import (paste-based)
 - [ ] `parse_trade_import(text)` service function in `projects/services.py`
