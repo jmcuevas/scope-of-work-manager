@@ -69,33 +69,28 @@ Track progress phase by phase. Check items off as completed.
 - [x] "Import Trades" and "Add Trade" buttons visible on dashboard *(2026-03-04)*
 
 ### Trade Import (paste-based)
-- [ ] `parse_trade_import(text)` service function in `projects/services.py`
-- [ ] Parser handles: tab-separated and comma-separated input, dollar signs in budget, extra whitespace, blank lines, invalid rows (skip gracefully)
-- [ ] Import form: textarea where PM pastes from spreadsheet + submit
-- [ ] Import view: parse → show preview of parsed rows → confirm → bulk-create Trade records
-- [ ] Duplicate CSI codes within the same project handled gracefully (skip or warn, don't crash)
-- [ ] 8-10 unit tests for `parse_trade_import()` covering all edge cases
+- [ ] ~~Deferred to post-MVP~~ — manual add is sufficient for pilot. Fuzzy match + confirm flow to be designed carefully before implementation.
 
 ### Manual Single-Trade Add
-- [ ] Inline add-trade form on dashboard: CSI trade dropdown + budget field
-- [ ] HTMX POST → creates Trade → returns updated trades table (no page reload)
-- [ ] Validation: prevent duplicate CSI trade on same project
+- [x] Trade add form: CSI trade dropdown + budget field *(2026-03-04)*
+- [x] Redirect to dashboard after trade created *(2026-03-04)*
+- [x] Validation: prevent duplicate CSI trade on same project *(2026-03-04)*
 
 ### HTMX Interactions
-- [ ] Trade status update: status dropdown change → `hx-patch` → updates Trade.status → returns updated row
-- [ ] Trade PE assignment: PE dropdown change → `hx-patch` → updates Trade.assigned_to → returns updated row
+- [x] Trade status update: status dropdown → hx-post → updates Trade.status → returns updated row *(2026-03-04)*
+- [x] Trade PE assignment: PE dropdown → hx-post → updates Trade.assigned_to → returns updated row *(2026-03-04)*
 
 ### URL & Navigation
-- [ ] `projects/urls.py` wired: list, create, edit, dashboard, import, trade add/update
-- [ ] Left sidebar updates when inside a project: show project name + back to project list link
-- [ ] Redirect root URL `/` to project list
+- [x] `projects/urls.py` wired: list, create, edit, dashboard, trade add/update *(2026-03-04)*
+- [x] Left sidebar updates when inside a project: show project name + back to project list link *(2026-03-04)*
+- [x] Redirect root URL `/` to project list *(2026-03-04)*
 
 ### Tests
-- [ ] Company isolation: user cannot access another company's project (returns 404)
-- [ ] `parse_trade_import()`: 8-10 edge case unit tests
-- [ ] Duplicate CSI trade on same project rejected
-- [ ] Trade status update persists correctly
-- [ ] Dashboard trade count matches actual Trade records
+- [x] Company isolation: user cannot access another company's project (returns 404) *(2026-03-04)*
+- [ ] ~~`parse_trade_import()` tests~~ — deferred with trade import feature (post-MVP)
+- [x] Duplicate CSI trade on same project rejected *(2026-03-04)*
+- [x] Trade status update persists correctly *(2026-03-04)*
+- [x] Dashboard trade count matches actual Trade records *(2026-03-04)*
 
 ---
 

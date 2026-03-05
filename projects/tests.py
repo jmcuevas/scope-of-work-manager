@@ -1,6 +1,8 @@
 import pytest
 from django.db import IntegrityError
+from django.urls import reverse
 from .factories import ProjectFactory, TradeFactory
+from .models import Trade
 from core.factories import CSITradeFactory
 
 
@@ -43,3 +45,48 @@ class TestProject:
         ProjectFactory(company=company)
         ProjectFactory(company=company_b)
         assert Project.objects.filter(company=company).count() == 1
+
+
+@pytest.mark.django_db
+class TestProjectViews:
+    def test_dashboard_returns_404_for_other_company(self, client, pm_user, company_b):
+        other_project = ProjectFactory(company=company_b)
+        client.force_login(pm_user)
+        url = reverse('projects:dashboard', kwargs={'pk': other_project.pk})
+        assert client.get(url).status_code == 404
+
+    def test_dashboard_trade_count_matches_records(self, client, pm_user):
+        project = ProjectFactory(company=pm_user.company)
+        TradeFactory.create_batch(3, project=project)
+        client.force_login(pm_user)
+        response = client.get(reverse('projects:dashboard', kwargs={'pk': project.pk}))
+        assert response.status_code == 200
+        assert response.context['total_trades'] == 3
+
+    def test_trade_status_update_persists(self, client, pm_user):
+        project = ProjectFactory(company=pm_user.company)
+        trade = TradeFactory(project=project, status=Trade.Status.NOT_STARTED)
+        client.force_login(pm_user)
+        url = reverse('projects:trade_update_status', kwargs={'pk': project.pk, 'trade_pk': trade.pk})
+        client.post(url, {'status': Trade.Status.OUT_TO_BID})
+        trade.refresh_from_db()
+        assert trade.status == Trade.Status.OUT_TO_BID
+
+    def test_trade_status_update_ignores_invalid_status(self, client, pm_user):
+        project = ProjectFactory(company=pm_user.company)
+        trade = TradeFactory(project=project, status=Trade.Status.NOT_STARTED)
+        client.force_login(pm_user)
+        url = reverse('projects:trade_update_status', kwargs={'pk': project.pk, 'trade_pk': trade.pk})
+        client.post(url, {'status': 'INVALID_STATUS'})
+        trade.refresh_from_db()
+        assert trade.status == Trade.Status.NOT_STARTED
+
+    def test_duplicate_csi_trade_rejected_by_form(self, client, pm_user):
+        project = ProjectFactory(company=pm_user.company)
+        csi = CSITradeFactory()
+        TradeFactory(project=project, csi_trade=csi)
+        client.force_login(pm_user)
+        url = reverse('projects:trade_add', kwargs={'pk': project.pk})
+        response = client.post(url, {'csi_trade': csi.pk, 'budget': ''})
+        assert response.status_code == 200  # re-renders form with error
+        assert project.trades.count() == 1  # no duplicate created

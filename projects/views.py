@@ -1,8 +1,8 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count
-from .models import Project
-from .forms import ProjectForm
+from .models import Project, Trade
+from .forms import ProjectForm, TradeForm
 
 
 def company_project_or_404(pk, user):
@@ -45,17 +45,66 @@ def trade_import(request, pk):
 @login_required
 def trade_add(request, pk):
     project = company_project_or_404(pk, request.user)
-    return render(request, 'projects/trade_add.html', {'project': project})
+    if request.method == 'POST':
+        form = TradeForm(request.POST, project=project)
+        if form.is_valid():
+            trade = form.save(commit=False)
+            trade.project = project
+            trade.order = project.trades.count()
+            trade.save()
+            return redirect('projects:dashboard', pk=project.pk)
+    else:
+        form = TradeForm(project=project)
+    return render(request, 'projects/trade_add.html', {'project': project, 'form': form})
+
+
+def _build_status_counts(project):
+    trades = project.trades.all()
+    counts = {s.value: 0 for s in Trade.Status}
+    for t in trades:
+        counts[t.status] += 1
+    return counts, trades.count()
 
 
 @login_required
 def trade_update_status(request, pk, trade_pk):
-    pass
+    project = company_project_or_404(pk, request.user)
+    trade = get_object_or_404(Trade, pk=trade_pk, project=project)
+    new_status = request.POST.get('status')
+    if new_status in Trade.Status.values:
+        trade.status = new_status
+        trade.save()
+    from core.models import User
+    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
+    response = render(request, 'projects/partials/trade_row.html', {'trade': trade, 'company_users': company_users})
+    response['HX-Trigger'] = 'statsChanged'
+    return response
+
+
+@login_required
+def project_stats(request, pk):
+    project = company_project_or_404(pk, request.user)
+    status_counts, total_trades = _build_status_counts(project)
+    return render(request, 'projects/partials/stats_bar.html', {
+        'project': project,
+        'status_counts': status_counts,
+        'total_trades': total_trades,
+    })
 
 
 @login_required
 def trade_update_assign(request, pk, trade_pk):
-    pass
+    from core.models import User
+    project = company_project_or_404(pk, request.user)
+    trade = get_object_or_404(Trade, pk=trade_pk, project=project)
+    user_id = request.POST.get('assigned_to')
+    if user_id:
+        trade.assigned_to = get_object_or_404(User, pk=user_id, company=request.user.company)
+    else:
+        trade.assigned_to = None
+    trade.save()
+    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
+    return render(request, 'projects/partials/trade_row.html', {'trade': trade, 'company_users': company_users})
 
 
 @login_required
@@ -77,12 +126,14 @@ def project_edit(request, pk):
 
 @login_required
 def project_dashboard(request, pk):
+    from core.models import User
     project = company_project_or_404(pk, request.user)
     trades = (
         project.trades
         .select_related('csi_trade', 'assigned_to')
         .order_by('order', 'csi_trade__csi_code')
     )
+    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
 
     # Stats
     from .models import Trade as TradeModel
@@ -95,4 +146,5 @@ def project_dashboard(request, pk):
         'trades': trades,
         'status_counts': status_counts,
         'total_trades': trades.count(),
+        'company_users': company_users,
     })

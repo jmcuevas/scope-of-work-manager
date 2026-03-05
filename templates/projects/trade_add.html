@@ -1,4 +1,82 @@
 {% extends "base.html" %}
+
+{% block title %}Add Trade — {{ project.name }}{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'projects:list' %}" class="hover:text-gray-700">Projects</a>
+  <span class="mx-2">/</span>
+  <a href="{% url 'projects:dashboard' project.pk %}" class="hover:text-gray-700">{{ project.name }}</a>
+  <span class="mx-2">/</span>
+  Add Trade
+{% endblock %}
+
+{% block sidebar %}
+  <a href="{% url 'projects:list' %}"
+     class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-500 hover:bg-gray-50 text-sm transition-colors mb-3">
+    ← Projects
+  </a>
+  <div class="px-3 py-2 mb-2">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Current Project</p>
+    <p class="text-sm font-medium text-gray-800">{{ project.name }}</p>
+    {% if project.number %}<p class="text-xs text-gray-400">{{ project.number }}</p>{% endif %}
+  </div>
+  <div class="border-t border-gray-100 pt-3 mt-1">
+    <a href="{% url 'projects:dashboard' project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors">
+      Buyout Dashboard
+    </a>
+  </div>
+{% endblock %}
+
 {% block content %}
-<p class="text-gray-500">Add trade coming soon — {{ project.name }}</p>
+<div class="max-w-lg">
+
+  <div class="mb-6">
+    <h1 class="text-2xl font-semibold text-gray-800">Add Trade</h1>
+    <p class="text-sm text-gray-500 mt-0.5">{{ project.name }}</p>
+  </div>
+
+  <div class="bg-white rounded-lg border border-gray-200 p-6">
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      <div class="space-y-5">
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">
+            {{ form.csi_trade.label }} <span class="text-red-500">*</span>
+          </label>
+          {{ form.csi_trade }}
+          {% if form.csi_trade.errors %}
+            <p class="mt-1 text-xs text-red-600">{{ form.csi_trade.errors|join:", " }}</p>
+          {% endif %}
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">
+            {{ form.budget.label }}
+          </label>
+          {{ form.budget }}
+          {% if form.budget.errors %}
+            <p class="mt-1 text-xs text-red-600">{{ form.budget.errors|join:", " }}</p>
+          {% endif %}
+        </div>
+
+      </div>
+
+      <div class="flex items-center gap-3 mt-8 pt-5 border-t border-gray-100">
+        <button type="submit"
+                class="px-5 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors">
+          Add Trade
+        </button>
+        <a href="{% url 'projects:dashboard' project.pk %}"
+           class="px-5 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">
+          Cancel
+        </a>
+      </div>
+
+    </form>
+  </div>
+
+</div>
 {% endblock %}
