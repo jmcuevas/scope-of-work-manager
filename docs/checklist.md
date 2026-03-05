@@ -49,10 +49,10 @@ Track progress phase by phase. Check items off as completed.
 **Goal**: PM can create a project, paste 15+ trades from a spreadsheet, see a clean buyout dashboard, and update statuses — all without full page reloads.
 
 ### Project List
-- [ ] Project list view: company-scoped queryset (users only see their company's projects)
-- [ ] Project list template: table/cards showing name, number, project type, trade count, link to dashboard
-- [ ] Empty state when no projects exist ("Create your first project")
-- [ ] "New Project" button
+- [x] Project list view: company-scoped queryset (users only see their company's projects) *(2026-03-04)*
+- [x] Project list template: table/cards showing name, number, project type, trade count, link to dashboard *(2026-03-04)*
+- [x] Empty state when no projects exist ("Create your first project") *(2026-03-04)*
+- [x] "New Project" button *(2026-03-04)*
 
 ### Project Create & Edit
 - [ ] `ProjectForm` (ModelForm): name, number, project_type, description, address
