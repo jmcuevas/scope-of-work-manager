@@ -46,16 +46,56 @@ Track progress phase by phase. Check items off as completed.
 ---
 
 ## Phase 2: Project Dashboard + Trade Setup (Week 2)
-**Goal**: PM can create a project, paste 15+ trades, see a clean dashboard, update statuses — no full page reloads.
+**Goal**: PM can create a project, paste 15+ trades from a spreadsheet, see a clean buyout dashboard, and update statuses — all without full page reloads.
 
-- [ ] Project list view (company-scoped)
-- [ ] Project create/edit forms
-- [ ] Trade import: paste-based parser (`parse_trade_import()` with robust test coverage)
-- [ ] Manual single-trade add (CSI dropdown + budget)
-- [ ] Buyout dashboard: trades table grouped by status, stats bar
-- [ ] Trade status update via HTMX
-- [ ] Trade PE assignment via HTMX
-- [ ] Integration tests: company isolation, import parser edge cases
+### Project List
+- [ ] Project list view: company-scoped queryset (users only see their company's projects)
+- [ ] Project list template: table/cards showing name, number, project type, trade count, link to dashboard
+- [ ] Empty state when no projects exist ("Create your first project")
+- [ ] "New Project" button
+
+### Project Create & Edit
+- [ ] `ProjectForm` (ModelForm): name, number, project_type, description, address
+- [ ] Project create view + template
+- [ ] Project edit view + template
+- [ ] Form validation and inline error display
+- [ ] Success redirect to buyout dashboard after create; back to dashboard after edit
+
+### Buyout Dashboard
+- [ ] Dashboard view: loads project + all trades, company-scoped
+- [ ] Stats bar: total trades + count per status (Not Started, In Progress, Out to Bid, etc.)
+- [ ] Trades table: CSI code, trade name, budget, status dropdown, assigned PE, link to scope editor (placeholder for now)
+- [ ] Empty state when no trades yet
+- [ ] "Import Trades" and "Add Trade" buttons visible on dashboard
+
+### Trade Import (paste-based)
+- [ ] `parse_trade_import(text)` service function in `projects/services.py`
+- [ ] Parser handles: tab-separated and comma-separated input, dollar signs in budget, extra whitespace, blank lines, invalid rows (skip gracefully)
+- [ ] Import form: textarea where PM pastes from spreadsheet + submit
+- [ ] Import view: parse → show preview of parsed rows → confirm → bulk-create Trade records
+- [ ] Duplicate CSI codes within the same project handled gracefully (skip or warn, don't crash)
+- [ ] 8-10 unit tests for `parse_trade_import()` covering all edge cases
+
+### Manual Single-Trade Add
+- [ ] Inline add-trade form on dashboard: CSI trade dropdown + budget field
+- [ ] HTMX POST → creates Trade → returns updated trades table (no page reload)
+- [ ] Validation: prevent duplicate CSI trade on same project
+
+### HTMX Interactions
+- [ ] Trade status update: status dropdown change → `hx-patch` → updates Trade.status → returns updated row
+- [ ] Trade PE assignment: PE dropdown change → `hx-patch` → updates Trade.assigned_to → returns updated row
+
+### URL & Navigation
+- [ ] `projects/urls.py` wired: list, create, edit, dashboard, import, trade add/update
+- [ ] Left sidebar updates when inside a project: show project name + back to project list link
+- [ ] Redirect root URL `/` to project list
+
+### Tests
+- [ ] Company isolation: user cannot access another company's project (returns 404)
+- [ ] `parse_trade_import()`: 8-10 edge case unit tests
+- [ ] Duplicate CSI trade on same project rejected
+- [ ] Trade status update persists correctly
+- [ ] Dashboard trade count matches actual Trade records
 
 ---
 
