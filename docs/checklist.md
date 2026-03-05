@@ -46,16 +46,51 @@ Track progress phase by phase. Check items off as completed.
 ---
 
 ## Phase 2: Project Dashboard + Trade Setup (Week 2)
-**Goal**: PM can create a project, paste 15+ trades, see a clean dashboard, update statuses — no full page reloads.
+**Goal**: PM can create a project, paste 15+ trades from a spreadsheet, see a clean buyout dashboard, and update statuses — all without full page reloads.
 
-- [ ] Project list view (company-scoped)
-- [ ] Project create/edit forms
-- [ ] Trade import: paste-based parser (`parse_trade_import()` with robust test coverage)
-- [ ] Manual single-trade add (CSI dropdown + budget)
-- [ ] Buyout dashboard: trades table grouped by status, stats bar
-- [ ] Trade status update via HTMX
-- [ ] Trade PE assignment via HTMX
-- [ ] Integration tests: company isolation, import parser edge cases
+### Project List
+- [x] Project list view: company-scoped queryset (users only see their company's projects) *(2026-03-04)*
+- [x] Project list template: table/cards showing name, number, project type, trade count, link to dashboard *(2026-03-04)*
+- [x] Empty state when no projects exist ("Create your first project") *(2026-03-04)*
+- [x] "New Project" button *(2026-03-04)*
+
+### Project Create & Edit
+- [x] `ProjectForm` (ModelForm): name, number, project_type, description, address *(2026-03-04)*
+- [x] Project create view + template *(2026-03-04)*
+- [x] Project edit view + template *(2026-03-04)*
+- [x] Form validation and inline error display *(2026-03-04)*
+- [x] Success redirect to buyout dashboard after create; back to dashboard after edit *(2026-03-04)*
+
+### Buyout Dashboard
+- [x] Dashboard view: loads project + all trades, company-scoped *(2026-03-04)*
+- [x] Stats bar: total trades + count per status (Not Started, In Progress, Out to Bid, etc.) *(2026-03-04)*
+- [x] Trades table: CSI code, trade name, budget, status badge, assigned PE, link to scope editor (placeholder) *(2026-03-04)*
+- [x] Empty state when no trades yet *(2026-03-04)*
+- [x] "Import Trades" and "Add Trade" buttons visible on dashboard *(2026-03-04)*
+
+### Trade Import (paste-based)
+- [ ] ~~Deferred to post-MVP~~ — manual add is sufficient for pilot. Fuzzy match + confirm flow to be designed carefully before implementation.
+
+### Manual Single-Trade Add
+- [x] Trade add form: CSI trade dropdown + budget field *(2026-03-04)*
+- [x] Redirect to dashboard after trade created *(2026-03-04)*
+- [x] Validation: prevent duplicate CSI trade on same project *(2026-03-04)*
+
+### HTMX Interactions
+- [x] Trade status update: status dropdown → hx-post → updates Trade.status → returns updated row *(2026-03-04)*
+- [x] Trade PE assignment: PE dropdown → hx-post → updates Trade.assigned_to → returns updated row *(2026-03-04)*
+
+### URL & Navigation
+- [x] `projects/urls.py` wired: list, create, edit, dashboard, trade add/update *(2026-03-04)*
+- [x] Left sidebar updates when inside a project: show project name + back to project list link *(2026-03-04)*
+- [x] Redirect root URL `/` to project list *(2026-03-04)*
+
+### Tests
+- [x] Company isolation: user cannot access another company's project (returns 404) *(2026-03-04)*
+- [ ] ~~`parse_trade_import()` tests~~ — deferred with trade import feature (post-MVP)
+- [x] Duplicate CSI trade on same project rejected *(2026-03-04)*
+- [x] Trade status update persists correctly *(2026-03-04)*
+- [x] Dashboard trade count matches actual Trade records *(2026-03-04)*
 
 ---
 

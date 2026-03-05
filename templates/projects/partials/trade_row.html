@@ -1,0 +1,51 @@
+{% load trade_tags %}
+<tr class="hover:bg-gray-50 transition-colors" id="trade-{{ trade.pk }}">
+
+  <!-- CSI Code -->
+  <td class="px-5 py-3 text-gray-500 font-mono text-xs">{{ trade.csi_trade.csi_code }}</td>
+
+  <!-- Trade Name -->
+  <td class="px-5 py-3 font-medium text-gray-800">{{ trade.csi_trade.name }}</td>
+
+  <!-- Budget -->
+  <td class="px-5 py-3 text-right text-gray-600">
+    {% if trade.budget %}${{ trade.budget|floatformat:0 }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+  </td>
+
+  <!-- Status dropdown (HTMX) -->
+  <td class="px-5 py-3">
+    <select name="status"
+            hx-post="{% url 'projects:trade_update_status' trade.project.pk trade.pk %}"
+            hx-target="#trade-{{ trade.pk }}"
+            hx-swap="outerHTML"
+            class="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500 {{ trade.status|status_badge_class }}">
+      {% for value, label in trade.Status.choices %}
+        <option value="{{ value }}" {% if trade.status == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </td>
+
+  <!-- Assigned PE (HTMX) -->
+  <td class="px-5 py-3">
+    <select name="assigned_to"
+            hx-post="{% url 'projects:trade_update_assign' trade.project.pk trade.pk %}"
+            hx-target="#trade-{{ trade.pk }}"
+            hx-swap="outerHTML"
+            class="border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500">
+      <option value="">Unassigned</option>
+      {% for user in company_users %}
+        <option value="{{ user.pk }}" {% if trade.assigned_to_id == user.pk %}selected{% endif %}>
+          {{ user.get_full_name|default:user.email }}
+        </option>
+      {% endfor %}
+    </select>
+  </td>
+
+  <!-- Open Scope link -->
+  <td class="px-5 py-3 text-right">
+    <a href="#" class="text-primary-600 hover:text-primary-800 text-xs font-medium transition-colors">
+      Open Scope →
+    </a>
+  </td>
+
+</tr>
