@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Scope Manager{% endblock %}</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50:  '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Flowbite -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css" />
+
+  <!-- HTMX -->
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+
+  {% block extra_head %}{% endblock %}
+</head>
+
+<body class="bg-gray-100 antialiased">
+
+  <!-- ═══════════════════════════════════════════════
+       TOP NAVBAR
+  ══════════════════════════════════════════════════ -->
+  <nav class="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 h-14 flex items-center px-4 gap-4">
+
+    <!-- App name -->
+    <a href="{% url 'projects:list' %}" class="flex items-center gap-2 font-semibold text-primary-700 text-lg whitespace-nowrap">
+      Scope Manager
+    </a>
+
+    <!-- Breadcrumb / page context -->
+    <div class="flex-1 text-sm text-gray-500">
+      {% block breadcrumb %}{% endblock %}
+    </div>
+
+    <!-- Right: user info + logout -->
+    {% if user.is_authenticated %}
+    <div class="flex items-center gap-3 text-sm text-gray-600">
+      <span class="hidden sm:block">{{ user.get_full_name|default:user.email }}</span>
+      {% if user.company %}
+        <span class="hidden md:block text-gray-400">{{ user.company.name }}</span>
+      {% endif %}
+      <a href="{% url 'account_logout' %}"
+         class="text-gray-500 hover:text-red-600 transition-colors">
+        Sign out
+      </a>
+    </div>
+    {% endif %}
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════
+       BELOW NAVBAR: sidebar + content
+  ══════════════════════════════════════════════════ -->
+  <div class="flex pt-14 min-h-screen">
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="fixed left-0 top-14 bottom-0 w-60 bg-white border-r border-gray-200 overflow-y-auto z-40">
+      <nav class="p-4 space-y-1 text-sm">
+        {% block sidebar %}{% endblock %}
+      </nav>
+    </aside>
+
+    <!-- MAIN AREA (offset by sidebar width) -->
+    <div class="ml-60 flex flex-1">
+
+      <!-- CENTER: main content -->
+      <main class="flex-1 p-6 min-w-0">
+
+        <!-- Flash messages -->
+        {% if messages %}
+          <div class="mb-4 space-y-2">
+            {% for message in messages %}
+              <div class="flex items-center gap-3 px-4 py-3 rounded-lg text-sm
+                {% if message.tags == 'error' %}bg-red-50 text-red-800 border border-red-200
+                {% elif message.tags == 'success' %}bg-green-50 text-green-800 border border-green-200
+                {% elif message.tags == 'warning' %}bg-yellow-50 text-yellow-800 border border-yellow-200
+                {% else %}bg-blue-50 text-blue-800 border border-blue-200{% endif %}">
+                {{ message }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+      </main>
+
+      <!-- RIGHT PANEL (only rendered when a page fills this block) -->
+      {% block right_panel %}{% endblock %}
+
+    </div>
+  </div>
+
+  <!-- Flowbite JS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
+
+  <!-- HTMX: pass CSRF token on all non-GET requests -->
+  <script>
+    document.body.addEventListener('htmx:configRequest', function(evt) {
+      if (evt.detail.verb !== 'get') {
+        evt.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+      }
+    });
+  </script>
+
+  {% block extra_js %}{% endblock %}
+
+</body>
+</html>

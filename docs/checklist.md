@@ -40,8 +40,8 @@ Track progress phase by phase. Check items off as completed.
 - [x] Model constraint tests (unique trade per project, email uniqueness, etc.) *(2026-03-04)*
 
 ### Base Template
-- [ ] `templates/base.html`: nav, flash messages, content block
-- [ ] Tailwind CSS wired via CDN
+- [x] `templates/base.html`: top navbar, left sidebar, main content, right panel block, flash messages *(2026-03-04)*
+- [x] Tailwind CSS + Flowbite wired via CDN, blue accent, HTMX CSRF configured *(2026-03-04)*
 
 ---
 
