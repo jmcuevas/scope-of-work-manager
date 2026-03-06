@@ -180,12 +180,42 @@ Track progress phase by phase. Check items off as completed.
 ## Phase 4: PDF Export (Week 5, first half)
 **Goal**: Clicking "Export PDF" downloads a clean, professional Exhibit A. Tested at multiple sizes.
 
-- [ ] PDF HTML template: header, sections, hierarchical items, page numbers
-- [ ] Print CSS: `@page` rules, margins, typography
-- [ ] WeasyPrint service: `generate_exhibit_pdf()` → returns bytes
-- [ ] Download view with correct `Content-Disposition` header
-- [ ] "Export PDF" button in editor footer
-- [ ] Tested: 1-page, 5-page, 10-page exhibits
+### Setup
+- [x] Verify WeasyPrint is in venv and install pango system dependency via Homebrew *(2026-03-05)*
+- [x] Create `exports/services.py` *(2026-03-05)*
+- [x] Create `exports/urls.py` with `app_name = 'exports'` *(2026-03-05)*
+- [x] Wire `exports/urls.py` into `scope_manager/urls.py` *(2026-03-05)*
+
+### PDF Template (`templates/exports/exhibit_pdf.html`)
+- [x] Document header block: "Exhibit A — Scope of Work" title, company name, project name + number, CSI trade name + code, export date *(2026-03-05)*
+- [x] Scope description block: rendered only if non-empty *(2026-03-05)*
+- [x] Section loop: section name header + all items in DFS order with hierarchical number prefix and level-based indentation *(2026-03-05)*
+- [x] Page footer: page number via CSS `@bottom-center { content: counter(page) " of " counter(pages); }` *(2026-03-05)*
+
+### Print CSS (inline `<style>` block in `exhibit_pdf.html`)
+- [x] `@page` rule: letter size, 1in margins *(2026-03-05)*
+- [x] Typography: Arial sans-serif; title 16pt bold, section header 11pt bold, item text 10pt *(2026-03-05)*
+- [x] Section formatting: top/bottom borders, `page-break-inside: avoid` *(2026-03-05)*
+- [x] No interactive styles — ink-safe black/dark-gray output *(2026-03-05)*
+
+### WeasyPrint Service (`exports/services.py`)
+- [x] `generate_exhibit_pdf(exhibit)`: fetches sections → DFS flatten + numbering per section → `render_to_string()` → `weasyprint.HTML(...).write_pdf()` → returns bytes *(2026-03-05)*
+- [x] `safe_filename(exhibit)`: builds `ExhibitA_{csi_code}_{trade_name}_{project_name}.pdf` with special chars stripped *(2026-03-05)*
+
+### Download View + URL
+- [x] `exhibit_pdf_download(request, pk)` in `exports/views.py`: `@login_required`, company-scoped 404, calls service, sets `Content-Disposition: attachment` *(2026-03-05)*
+- [x] URL `exports/exhibit/<int:pk>/pdf/` wired in `exports/urls.py` *(2026-03-05)*
+
+### Editor Integration
+- [x] "Export PDF" button added to `editor.html` header alongside "Save as Template" *(2026-03-05)*
+
+### Tests (`exports/tests.py`) — 11 tests, all passing
+- [x] `generate_exhibit_pdf()` returns non-empty bytes for flat, nested, and empty-item exhibits *(2026-03-05)*
+- [x] `safe_filename()` contains trade info and has no special characters *(2026-03-05)*
+- [x] Download view returns HTTP 200, `Content-Type: application/pdf`, `Content-Disposition: attachment` *(2026-03-05)*
+- [x] Company isolation: another company's user gets 404 *(2026-03-05)*
+- [x] Unauthenticated request redirects to login *(2026-03-05)*
+- [x] Multi-section smoke test (5 sections × 4 items) *(2026-03-05)*
 
 ---
 
