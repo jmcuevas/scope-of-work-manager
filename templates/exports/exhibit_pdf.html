@@ -1,0 +1,187 @@
+{% load exhibit_tags %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Exhibit A &mdash; {{ exhibit.csi_trade.name }}</title>
+  <style>
+    /* ------------------------------------------------------------------ */
+    /* Page setup                                                           */
+    /* ------------------------------------------------------------------ */
+    @page {
+      size: letter;
+      margin: 1in 1in 0.85in 1in;
+
+      @bottom-center {
+        content: "Page " counter(page) " of " counter(pages);
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 8pt;
+        color: #666;
+      }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Base typography                                                      */
+    /* ------------------------------------------------------------------ */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 10pt;
+      color: #1a1a1a;
+      line-height: 1.45;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Document header                                                      */
+    /* ------------------------------------------------------------------ */
+    .doc-header {
+      border-bottom: 2px solid #1a1a1a;
+      padding-bottom: 10pt;
+      margin-bottom: 16pt;
+    }
+
+    .doc-title {
+      font-size: 16pt;
+      font-weight: bold;
+      letter-spacing: 0.02em;
+      margin-bottom: 4pt;
+    }
+
+    .doc-trade {
+      font-size: 12pt;
+      font-weight: bold;
+      margin-bottom: 6pt;
+    }
+
+    .doc-meta {
+      font-size: 9pt;
+      color: #444;
+      display: flex;
+      gap: 16pt;
+    }
+
+    .doc-meta span {
+      display: inline-block;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Scope description                                                    */
+    /* ------------------------------------------------------------------ */
+    .scope-description {
+      margin-bottom: 16pt;
+      padding: 8pt 10pt;
+      border-left: 3pt solid #555;
+      background: #f7f7f7;
+      page-break-inside: avoid;
+    }
+
+    .scope-description-label {
+      font-size: 8pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 4pt;
+    }
+
+    .scope-description-text {
+      font-size: 9.5pt;
+      color: #333;
+      font-style: italic;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Sections                                                             */
+    /* ------------------------------------------------------------------ */
+    .section {
+      margin-bottom: 14pt;
+      page-break-inside: avoid;
+    }
+
+    .section-header {
+      font-size: 11pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-top: 1pt solid #1a1a1a;
+      border-bottom: 1pt solid #ccc;
+      padding: 4pt 0;
+      margin-bottom: 4pt;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Items                                                                */
+    /* ------------------------------------------------------------------ */
+    .item {
+      display: flex;
+      align-items: baseline;
+      gap: 6pt;
+      padding: 2pt 0;
+      line-height: 1.4;
+    }
+
+    .item-number {
+      font-size: 9pt;
+      color: #555;
+      font-family: 'Courier New', Courier, monospace;
+      white-space: nowrap;
+      flex-shrink: 0;
+      min-width: 32pt;
+    }
+
+    .item-text {
+      font-size: 10pt;
+      flex: 1;
+    }
+
+    /* Level indentation — applied via inline style from template */
+  </style>
+</head>
+<body>
+
+  <!-- Document header -->
+  <div class="doc-header">
+    <div class="doc-title">Exhibit A &mdash; Scope of Work</div>
+    <div class="doc-trade">
+      {{ exhibit.csi_trade.csi_code }} &mdash; {{ exhibit.csi_trade.name }}
+    </div>
+    <div class="doc-meta">
+      {% if exhibit.project %}
+        <span><strong>Project:</strong> {{ exhibit.project.name }}{% if exhibit.project.number %} ({{ exhibit.project.number }}){% endif %}</span>
+      {% endif %}
+      <span><strong>Company:</strong> {{ exhibit.company.name }}</span>
+      <span><strong>Date:</strong> {{ export_date|date:"F j, Y" }}</span>
+      <span><strong>Status:</strong> {{ exhibit.get_status_display }}</span>
+    </div>
+  </div>
+
+  <!-- Scope description (only if set) -->
+  {% if exhibit.scope_description %}
+  <div class="scope-description">
+    <div class="scope-description-label">Scope Description</div>
+    <div class="scope-description-text">{{ exhibit.scope_description }}</div>
+  </div>
+  {% endif %}
+
+  <!-- Sections -->
+  {% for entry in sections_data %}
+  <div class="section">
+    <div class="section-header">{{ entry.section.name }}</div>
+
+    {% for item in entry.items %}
+    <div class="item" style="padding-left: {{ item.level }}cm;">
+      <span class="item-number">{{ entry.numbers|get_item:item.pk }}</span>
+      <span class="item-text">{{ item.text }}</span>
+    </div>
+    {% empty %}
+    <p style="font-size:9pt; color:#999; padding: 3pt 0; font-style:italic;">No items.</p>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+</body>
+</html>

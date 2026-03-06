@@ -8,4 +8,5 @@ urlpatterns = [
     path('accounts/', include('allauth.urls')),
     path('projects/', include('projects.urls', namespace='projects')),
     path('exhibits/', include('exhibits.urls', namespace='exhibits')),
+    path('exports/', include('exports.urls', namespace='exports')),
 ]
