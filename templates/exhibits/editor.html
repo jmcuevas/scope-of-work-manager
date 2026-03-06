@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}{{ exhibit.csi_trade.name }} — {{ exhibit.project.name }} — Scope Manager{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'projects:list' %}" class="hover:text-gray-700">Projects</a>
+  <span class="mx-2">/</span>
+  <a href="{% url 'projects:dashboard' exhibit.project.pk %}" class="hover:text-gray-700">{{ exhibit.project.name }}</a>
+  <span class="mx-2">/</span>
+  {{ exhibit.csi_trade.name }}
+{% endblock %}
+
+{% block sidebar %}
+  <a href="{% url 'projects:list' %}"
+     class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-500 hover:bg-gray-50 text-sm transition-colors mb-3">
+    ← Projects
+  </a>
+
+  <div class="px-3 py-2 mb-2">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Current Project</p>
+    <p class="text-sm font-medium text-gray-800">{{ exhibit.project.name }}</p>
+    {% if exhibit.project.number %}
+      <p class="text-xs text-gray-400">{{ exhibit.project.number }}</p>
+    {% endif %}
+  </div>
+
+  <div class="border-t border-gray-100 pt-3 mt-1">
+    <a href="{% url 'projects:dashboard' exhibit.project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors">
+      Buyout Dashboard
+    </a>
+    <a href="{% url 'exhibits:editor' exhibit.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-primary-700 bg-primary-50 font-medium text-sm mt-1">
+      Scope Editor
+    </a>
+  </div>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+
+  <!-- Exhibit header -->
+  <div class="flex items-start justify-between mb-6">
+    <div>
+      <div class="flex items-center gap-3 mb-1">
+        <h1 class="text-2xl font-semibold text-gray-800">{{ exhibit.csi_trade.name }}</h1>
+        <form method="POST" action="{% url 'exhibits:update_status' exhibit.pk %}">
+          {% csrf_token %}
+          <select name="status"
+                  onchange="this.form.submit()"
+                  class="text-xs font-medium rounded-full border-0 px-2 py-0.5 focus:ring-2 focus:ring-primary-400 cursor-pointer
+                  {% if exhibit.status == 'DRAFT' %}bg-gray-100 text-gray-600
+                  {% elif exhibit.status == 'READY_FOR_REVIEW' %}bg-yellow-100 text-yellow-700
+                  {% elif exhibit.status == 'READY_FOR_BID' %}bg-blue-100 text-blue-700
+                  {% elif exhibit.status == 'FINALIZED' %}bg-green-100 text-green-700
+                  {% endif %}">
+            <option value="DRAFT" {% if exhibit.status == 'DRAFT' %}selected{% endif %}>Draft</option>
+            <option value="READY_FOR_REVIEW" {% if exhibit.status == 'READY_FOR_REVIEW' %}selected{% endif %}>Ready for Review</option>
+            <option value="READY_FOR_BID" {% if exhibit.status == 'READY_FOR_BID' %}selected{% endif %}>Ready for Bid</option>
+            <option value="FINALIZED" {% if exhibit.status == 'FINALIZED' %}selected{% endif %}>Finalized</option>
+          </select>
+        </form>
+      </div>
+      <p class="text-sm text-gray-500">
+        {{ exhibit.csi_trade.csi_code }} · {{ exhibit.project.name }}
+        {% if exhibit.project.project_type %} · {{ exhibit.project.project_type }}{% endif %}
+      </p>
+    </div>
+    <div class="flex flex-col items-end gap-2">
+      <p class="text-xs text-gray-400">
+        Last edited by {{ exhibit.last_edited_by.get_full_name|default:exhibit.last_edited_by.email }}
+      </p>
+      <form method="POST" action="{% url 'exhibits:save_as_template' exhibit.pk %}">
+        {% csrf_token %}
+        <button type="submit"
+                class="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
+          Save as Template
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scope description -->
+  <div class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+      Scope Description
+    </label>
+    <form method="POST" action="{% url 'exhibits:editor' exhibit.pk %}">
+      {% csrf_token %}
+      <textarea name="scope_description"
+                rows="3"
+                placeholder="Describe the project context and what this trade covers — used by the AI scope assistant..."
+                class="w-full text-sm text-gray-700 placeholder-gray-300 border-0 resize-none focus:outline-none focus:ring-0">{{ exhibit.scope_description }}</textarea>
+      <div class="flex justify-end mt-2">
+        <button type="submit"
+                class="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
+          Save Description
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Section list -->
+  <div id="section-list">
+    {% include "exhibits/partials/section_list.html" %}
+  </div>
+
+  <!-- Add Section -->
+  <div class="mt-4">
+    <button hx-post="{% url 'exhibits:section_add' exhibit.pk %}"
+            hx-target="#section-list"
+            hx-swap="innerHTML"
+            class="w-full px-4 py-2.5 border border-dashed border-gray-300 hover:border-primary-400 hover:bg-primary-50 text-sm text-gray-500 hover:text-primary-600 rounded-lg transition-colors">
+      + Add Section
+    </button>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block right_panel %}
+<aside class="w-72 shrink-0 border-l border-gray-200 bg-white p-5 overflow-y-auto">
+
+  <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Sidebar</p>
+
+  <!-- Notes placeholder -->
+  <div class="mb-6">
+    <p class="text-xs font-medium text-gray-500 mb-2">Notes</p>
+    <p class="text-xs text-gray-400">
+      Trade notes will appear here in Phase 5.
+    </p>
+  </div>
+
+  <div class="border-t border-gray-100 pt-4">
+    <!-- AI placeholder -->
+    <p class="text-xs font-medium text-gray-500 mb-2">AI Scope Assistant</p>
+    <p class="text-xs text-gray-400">
+      AI scope generation coming in Phase 6.
+    </p>
+  </div>
+
+</aside>
+{% endblock %}

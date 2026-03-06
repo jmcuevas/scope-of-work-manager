@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Pick Starting Point — {{ trade.csi_trade.name }} — Scope Manager{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'projects:list' %}" class="hover:text-gray-700">Projects</a>
+  <span class="mx-2">/</span>
+  <a href="{% url 'projects:dashboard' project.pk %}" class="hover:text-gray-700">{{ project.name }}</a>
+  <span class="mx-2">/</span>
+  {{ trade.csi_trade.name }} — Pick Starting Point
+{% endblock %}
+
+{% block sidebar %}
+  <a href="{% url 'projects:list' %}"
+     class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-500 hover:bg-gray-50 text-sm transition-colors mb-3">
+    ← Projects
+  </a>
+
+  <div class="px-3 py-2 mb-2">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Current Project</p>
+    <p class="text-sm font-medium text-gray-800">{{ project.name }}</p>
+    {% if project.number %}
+      <p class="text-xs text-gray-400">{{ project.number }}</p>
+    {% endif %}
+  </div>
+
+  <div class="border-t border-gray-100 pt-3 mt-1">
+    <a href="{% url 'projects:dashboard' project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors">
+      Buyout Dashboard
+    </a>
+  </div>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+
+  <!-- Page header -->
+  <div class="mb-8">
+    <h1 class="text-2xl font-semibold text-gray-800">Pick a Starting Point</h1>
+    <p class="text-sm text-gray-500 mt-1">
+      {{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}
+    </p>
+  </div>
+
+  <!-- Start from Blank -->
+  <div class="mb-8">
+    <form method="POST" action="{% url 'exhibits:exhibit_start' project.pk trade.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="source" value="blank">
+      <button type="submit"
+              class="w-full flex items-center justify-between px-5 py-4 bg-white border-2 border-dashed border-gray-300 hover:border-primary-400 hover:bg-primary-50 rounded-lg transition-colors group">
+        <div class="text-left">
+          <p class="text-sm font-semibold text-gray-800 group-hover:text-primary-700">Start from Blank</p>
+          <p class="text-xs text-gray-500 mt-0.5">Begin with 5 empty default sections</p>
+        </div>
+        <span class="text-gray-400 group-hover:text-primary-600 text-lg">+</span>
+      </button>
+    </form>
+  </div>
+
+  <!-- Company Templates -->
+  {% if templates %}
+  <div class="mb-8">
+    <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Company Templates</h2>
+    <div class="space-y-2">
+      {% for exhibit in templates %}
+      <form method="POST" action="{% url 'exhibits:exhibit_start' project.pk trade.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="source" value="{{ exhibit.pk }}">
+        <button type="submit"
+                class="w-full flex items-center justify-between px-5 py-4 bg-white border border-gray-200 hover:border-primary-400 hover:bg-primary-50 rounded-lg transition-colors text-left group">
+          <div>
+            <p class="text-sm font-medium text-gray-800 group-hover:text-primary-700">
+              {{ exhibit.csi_trade.name }} Template
+            </p>
+            <p class="text-xs text-gray-500 mt-0.5">
+              {{ exhibit.sections.count }} section{{ exhibit.sections.count|pluralize }}
+              · Created by {{ exhibit.created_by.get_full_name|default:exhibit.created_by.email }}
+            </p>
+          </div>
+          <span class="text-xs text-primary-600 font-medium opacity-0 group-hover:opacity-100 transition-opacity">Use this →</span>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Past Project Exhibits -->
+  {% if past_exhibits %}
+  <div class="mb-8">
+    <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Past Project Exhibits</h2>
+    <div class="space-y-2">
+      {% for exhibit in past_exhibits %}
+      <form method="POST" action="{% url 'exhibits:exhibit_start' project.pk trade.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="source" value="{{ exhibit.pk }}">
+        <button type="submit"
+                class="w-full flex items-center justify-between px-5 py-4 bg-white border border-gray-200 hover:border-primary-400 hover:bg-primary-50 rounded-lg transition-colors text-left group">
+          <div>
+            <p class="text-sm font-medium text-gray-800 group-hover:text-primary-700">
+              {{ exhibit.project.name }}
+              {% if exhibit.project.project_type == project.project_type %}
+                <span class="ml-2 text-xs text-green-600 font-normal">(same project type)</span>
+              {% endif %}
+            </p>
+            <p class="text-xs text-gray-500 mt-0.5">
+              {{ exhibit.project.project_type }}
+              · {{ exhibit.sections.count }} section{{ exhibit.sections.count|pluralize }}
+              · {{ exhibit.updated_at|date:"M j, Y" }}
+            </p>
+          </div>
+          <span class="text-xs text-primary-600 font-medium opacity-0 group-hover:opacity-100 transition-opacity">Use this →</span>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Empty state when no templates or past exhibits exist -->
+  {% if not templates and not past_exhibits %}
+  <p class="text-sm text-gray-400 text-center py-6">
+    No templates or past exhibits found for this trade. Start from blank to create the first one.
+  </p>
+  {% endif %}
+
+</div>
+{% endblock %}

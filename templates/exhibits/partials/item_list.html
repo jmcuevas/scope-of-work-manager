@@ -1,0 +1,5 @@
+{% for item in items %}
+  {% include "exhibits/partials/item.html" %}
+{% empty %}
+  <p class="px-4 py-3 text-xs text-gray-400 italic">No items yet.</p>
+{% endfor %}

@@ -1,0 +1,74 @@
+<div class="bg-white rounded-lg border border-gray-200 mb-3" id="section-{{ section.pk }}">
+
+  <!-- Section header -->
+  <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50 rounded-t-lg">
+
+    <!-- Inline rename form -->
+    <form hx-post="{% url 'exhibits:section_rename' exhibit.pk section.pk %}"
+          hx-target="#section-list"
+          hx-swap="innerHTML"
+          class="flex-1 flex items-center gap-2 mr-3 min-w-0">
+      <input type="text"
+             name="name"
+             value="{{ section.name }}"
+             class="peer flex-1 min-w-0 text-sm font-semibold text-gray-800 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-primary-400 focus:outline-none focus:ring-0 py-0.5 transition-colors">
+      <button type="submit"
+              class="text-xs text-gray-400 hover:text-primary-600 opacity-0 peer-focus:opacity-100 transition-opacity whitespace-nowrap">
+        Save
+      </button>
+    </form>
+
+    <!-- Section controls -->
+    <div class="flex items-center gap-0.5 shrink-0">
+      <button hx-post="{% url 'exhibits:section_move' exhibit.pk section.pk %}"
+              hx-vals='{"direction": "up"}'
+              hx-target="#section-list"
+              hx-swap="innerHTML"
+              title="Move up"
+              class="p-1.5 text-gray-400 hover:text-gray-700 rounded transition-colors">
+        ↑
+      </button>
+      <button hx-post="{% url 'exhibits:section_move' exhibit.pk section.pk %}"
+              hx-vals='{"direction": "down"}'
+              hx-target="#section-list"
+              hx-swap="innerHTML"
+              title="Move down"
+              class="p-1.5 text-gray-400 hover:text-gray-700 rounded transition-colors">
+        ↓
+      </button>
+      <button hx-post="{% url 'exhibits:section_delete' exhibit.pk section.pk %}"
+              hx-target="#section-list"
+              hx-swap="innerHTML"
+              hx-confirm="Delete '{{ section.name }}' and all its items?"
+              title="Delete section"
+              class="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors ml-1">
+        ✕
+      </button>
+    </div>
+  </div>
+
+  <!-- Item list -->
+  <div id="items-{{ section.pk }}" class="divide-y divide-gray-50">
+    {% load exhibit_tags %}
+    {% include "exhibits/partials/item_list.html" with items=items_by_section|get_item:section.pk %}
+  </div>
+
+  <!-- Add item form -->
+  <div class="px-4 py-2.5 border-t border-gray-100">
+    <form hx-post="{% url 'exhibits:item_add' exhibit.pk section.pk %}"
+          hx-target="#items-{{ section.pk }}"
+          hx-swap="innerHTML"
+          hx-on:htmx:after-request="this.reset()"
+          class="flex items-center gap-2">
+      <input type="text"
+             name="text"
+             placeholder="Add item..."
+             class="flex-1 text-sm text-gray-700 placeholder-gray-300 border-0 focus:outline-none focus:ring-0 py-1 bg-transparent">
+      <button type="submit"
+              class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors whitespace-nowrap">
+        + Add
+      </button>
+    </form>
+  </div>
+
+</div>

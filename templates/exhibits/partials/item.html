@@ -1,0 +1,56 @@
+{% load exhibit_tags %}
+<div id="item-{{ item.pk }}"
+     class="flex items-start justify-between py-2.5 group hover:bg-gray-50 transition-colors"
+     style="padding-left: {{ item.level|add:1 }}rem; padding-right: 1rem;">
+  <p class="text-sm text-gray-700 flex-1 leading-relaxed">
+    {% with number=numbers|get_item:item.pk %}
+      {% if number %}
+        <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ number }}</span>
+      {% endif %}
+    {% endwith %}
+    {{ item.text }}
+  </p>
+  <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-3 shrink-0">
+    <button hx-post="{% url 'exhibits:item_move' exhibit.pk section.pk item.pk 'up' %}"
+            hx-target="#items-{{ section.pk }}"
+            hx-swap="innerHTML"
+            title="Move up"
+            class="text-xs text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded transition-colors">
+      ↑
+    </button>
+    <button hx-post="{% url 'exhibits:item_move' exhibit.pk section.pk item.pk 'down' %}"
+            hx-target="#items-{{ section.pk }}"
+            hx-swap="innerHTML"
+            title="Move down"
+            class="text-xs text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded transition-colors">
+      ↓
+    </button>
+    <button hx-post="{% url 'exhibits:item_indent' exhibit.pk section.pk item.pk %}"
+            hx-target="#items-{{ section.pk }}"
+            hx-swap="innerHTML"
+            title="Indent"
+            class="text-xs text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded transition-colors">
+      →
+    </button>
+    <button hx-post="{% url 'exhibits:item_outdent' exhibit.pk section.pk item.pk %}"
+            hx-target="#items-{{ section.pk }}"
+            hx-swap="innerHTML"
+            title="Outdent"
+            class="text-xs text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded transition-colors">
+      ←
+    </button>
+    <button hx-get="{% url 'exhibits:item_edit' exhibit.pk section.pk item.pk %}"
+            hx-target="#item-{{ item.pk }}"
+            hx-swap="outerHTML"
+            class="text-xs text-gray-400 hover:text-primary-600 px-1.5 py-0.5 rounded transition-colors">
+      Edit
+    </button>
+    <button hx-post="{% url 'exhibits:item_delete' exhibit.pk section.pk item.pk %}"
+            hx-target="#items-{{ section.pk }}"
+            hx-swap="innerHTML"
+            hx-confirm="Delete this item and any sub-items?"
+            class="text-xs text-gray-400 hover:text-red-500 px-1.5 py-0.5 rounded transition-colors">
+      Delete
+    </button>
+  </div>
+</div>
