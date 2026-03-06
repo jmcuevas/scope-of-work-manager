@@ -98,21 +98,82 @@ Track progress phase by phase. Check items off as completed.
 **Goal**: Full editor workflow — pick template → clone → edit sections/items → reorder → indent/outdent. Hierarchical numbering correct after every operation.
 
 ### Week 3 — Template picker + clone + basic editor
-- [ ] Template/past exhibit picker (filtered by CSI trade, sorted by project type match)
-- [ ] Clone service (deep copy with parent FK remapping)
-- [ ] Create-blank-exhibit service (5 default sections)
-- [ ] Editor page layout: two-column (content left, sidebar right)
-- [ ] Section CRUD: add, rename, delete, reorder (HTMX)
-- [ ] Item CRUD: add, click-to-edit, delete (with descendants)
+
+#### URL & Routing
+- [x] Create `exhibits/urls.py` with `app_name = 'exhibits'` — entry flow URLs (open/pick/start) + editor URL + all HTMX section/item endpoints *(2026-03-05)*
+- [x] Wire `exhibits/` into `scope_manager/urls.py` *(2026-03-05)*
+
+#### Services (`exhibits/services.py`)
+- [x] `create_blank_exhibit(trade, user)` — creates exhibit + 5 default sections: General Conditions, Scope of Work, Specific Inclusions, Specific Exclusions, Clarifications & Assumptions *(2026-03-05)*
+- [x] `clone_exhibit(source_exhibit, trade, user)` — deep-copies all sections and items; two-pass approach: create items with `parent=None` first, then remap parent FKs using old→new pk map *(2026-03-05)*
+
+#### Entry Flow Views
+- [x] `trade_scope_open` — checks if exhibit already exists for the trade's `(project, csi_trade)` pair; redirects to editor if found, picker if not *(2026-03-05)*
+- [x] `template_picker` — lists templates (`is_template=True`) + finalized past exhibits for the same CSI trade, sorted by project type match then date *(2026-03-05)*
+- [x] `exhibit_start` (POST) — calls clone or create-blank service based on `source` param; sets `trade.status = SCOPE_IN_PROGRESS`; redirects to editor *(2026-03-05)*
+
+#### Template Picker Page
+- [x] `templates/exhibits/picker.html` — "Start from Blank" button + company template cards + past exhibit cards; each card has a form that POSTs to `exhibit_start` with `source=<pk>` or `source=blank` *(2026-03-05)*
+
+#### Editor Page
+- [x] `exhibit_editor` view — fetches exhibit (company-scoped), prefetches sections with items *(2026-03-05)*
+- [x] `templates/exhibits/editor.html` — two-column layout: section list (left, ~70%) + placeholder sidebar (right, ~30%); scope description textarea with manual Save button *(2026-03-05)*
+
+#### Section CRUD (HTMX — all return `partials/section_list.html`)
+- [x] `partials/section_list.html` + `partials/section.html` — section list is the HTMX swap target (`id="section-list"`); each section shows name, rename/delete/move-up/move-down controls, its item list, and an "Add Item" button *(2026-03-05)*
+- [x] `section_add` view — appends new section at end; returns section list *(2026-03-05)*
+- [x] `section_rename` view — updates section name; returns section list *(2026-03-05)*
+- [x] `section_delete` view — deletes section (cascade removes items); returns section list *(2026-03-05)*
+- [x] `section_move` view — reads `direction` param (up/down), swaps `order` with adjacent section; returns section list *(2026-03-05)*
+
+#### Item CRUD (HTMX — target is item list within a section, `id="items-<section_pk>"`)
+- [x] `partials/item.html` + `partials/item_form.html` — display mode shows text + Edit/Delete buttons; edit mode shows textarea + Save/Cancel *(2026-03-05)*
+- [x] `item_add` view — creates top-level item (`level=0`, `parent=None`) at end of section; returns section's item list *(2026-03-05)*
+- [x] `item_edit` view — GET returns edit form partial; POST saves text and returns display partial (outerHTML swap on `#item-<pk>`) *(2026-03-05)*
+- [x] `item_delete` view — recursively collects item + all descendants, deletes all; returns section's item list *(2026-03-05)*
+
+#### Wiring
+- [x] Update `trade_row.html` "Open Scope →" link to `{% url 'exhibits:trade_scope_open' trade.project.pk trade.pk %}` *(2026-03-05)*
 
 ### Week 4 — Hierarchy + polish
-- [ ] Item reordering: up/down with subtree integrity
-- [ ] Item indent/outdent with cascade to descendants
-- [ ] Hierarchical numbering (server-side: 1, 1.1, 1.1.1)
-- [ ] Scope description textarea (saved to DB)
-- [ ] Save-as-template flow
-- [ ] Exhibit status transitions (DRAFT → READY_FOR_REVIEW → READY_FOR_BID → FINALIZED) with Trade status sync
-- [ ] Editor integration tests
+
+#### URL Additions
+- [x] Add 5 new patterns to `exhibits/urls.py`: `item_move`, `item_indent`, `item_outdent`, `exhibit_save_as_template`, `exhibit_update_status` *(2026-03-05)*
+
+#### Hierarchical Numbering
+- [x] `compute_section_numbering(section)` in `services.py` — builds item tree in memory, recursively assigns number strings (`1`, `1.1`, `1.1.1`); returns `{item_pk: "1.2.3"}` dict *(2026-03-05)*
+- [x] `exhibits/templatetags/exhibit_tags.py` — `get_item` filter so templates can do `{{ numbers|get_item:item.pk }}` *(2026-03-05)*
+- [x] Update `_item_list_response` and `_section_list_response` in `views.py` to call `compute_section_numbering` and pass `numbers` dict to templates *(2026-03-05)*
+- [x] Update `item.html` to display the hierarchical number prefix before item text *(2026-03-05)*
+
+#### Item Reordering
+- [x] `item_move` view — finds siblings (same `parent` + same `section`), swaps `order` with adjacent sibling in given direction; subtree follows for free since children are always rendered under their parent; returns item list *(2026-03-05)*
+- [x] Add ↑ / ↓ buttons to `item.html` (visible on hover, alongside Edit/Delete) *(2026-03-05)*
+
+#### Item Indent / Outdent
+- [x] `indent_item(item)` in `services.py` — finds previous sibling; sets `item.parent = previous_sibling`, `item.level += 1`, appends to end of new parent's children; cascades `level += 1` to all descendants via `bulk_update` *(2026-03-05)*
+- [x] `outdent_item(item)` in `services.py` — sets `item.parent = item.parent.parent` (may be `None`), `item.level -= 1`, appends to end of new sibling group; cascades `level -= 1` to all descendants via `bulk_update` *(2026-03-05)*
+- [x] `item_indent` and `item_outdent` views — call the respective service functions; return item list for the section *(2026-03-05)*
+- [x] Add → (indent) and ← (outdent) buttons to `item.html` (visible on hover) *(2026-03-05)*
+
+#### Save-as-Template
+- [x] `save_as_template(source_exhibit, user)` in `services.py` — reuses clone logic with `is_template=True`, `project=None` *(2026-03-05)*
+- [x] `exhibit_save_as_template` view (POST) — calls service, redirects to original exhibit's editor with a success flash message *(2026-03-05)*
+- [x] Add "Save as Template" button to editor header *(2026-03-05)*
+
+#### Exhibit Status Transitions
+- [x] `exhibit_update_status` view (POST) — validates status value; updates `exhibit.status`; syncs trade status: `READY_FOR_BID` → trade `OUT_TO_BID`, `FINALIZED` → trade `SUBCONTRACT_ISSUED` (never regresses trade status); trade looked up via `(exhibit.project, exhibit.csi_trade)` *(2026-03-05)*
+- [x] Replace static status badge in `editor.html` header with a `<select>` form that auto-submits on change to `exhibit_update_status` *(2026-03-05)*
+
+#### Integration Tests (`exhibits/tests.py`)
+- [x] Service tests: `create_blank_exhibit` (5 sections), `clone_exhibit` (parent FK remapping), `save_as_template` (`is_template=True`, `project=None`) *(2026-03-05)*
+- [x] Entry flow tests: `trade_scope_open` redirects correctly; `exhibit_start` sets trade to `SCOPE_IN_PROGRESS`; company isolation (404 for other company's exhibit) *(2026-03-05)*
+- [x] Section CRUD tests: add, rename, delete (cascades items), move (order swaps correctly) *(2026-03-05)*
+- [x] Item CRUD tests: add, edit, delete with descendants *(2026-03-05)*
+- [x] Item reorder tests: up/down swaps correct siblings; first/last item no-ops *(2026-03-05)*
+- [x] Indent/outdent tests: correct parent + level after indent; correct parent + level after outdent; descendants cascade level change *(2026-03-05)*
+- [x] Numbering tests: `compute_section_numbering` returns correct strings for flat and nested structures *(2026-03-05)*
+- [x] Status transition tests: trade status synced at `READY_FOR_BID` and `FINALIZED`; other transitions leave trade unchanged *(2026-03-05)*
 
 ---
 

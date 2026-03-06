@@ -1,0 +1,7 @@
+{% for section in sections %}
+  {% include "exhibits/partials/section.html" %}
+{% empty %}
+  <div class="py-8 text-center">
+    <p class="text-sm text-gray-400">No sections yet. Click "Add Section" to get started.</p>
+  </div>
+{% endfor %}

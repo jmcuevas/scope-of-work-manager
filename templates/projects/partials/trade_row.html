@@ -43,7 +43,8 @@
 
   <!-- Open Scope link -->
   <td class="px-5 py-3 text-right">
-    <a href="#" class="text-primary-600 hover:text-primary-800 text-xs font-medium transition-colors">
+    <a href="{% url 'exhibits:trade_scope_open' trade.project.pk trade.pk %}"
+       class="text-primary-600 hover:text-primary-800 text-xs font-medium transition-colors">
       Open Scope →
     </a>
   </td>
