@@ -127,17 +127,14 @@
 {% block right_panel %}
 <aside class="w-72 shrink-0 border-l border-gray-200 bg-white p-5 overflow-y-auto">
 
-  <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Sidebar</p>
+  <!-- Notes sidebar -->
+  {% if exhibit.project %}
+    {% include "notes/partials/note_list.html" %}
+  {% else %}
+    <p class="text-xs text-gray-400 italic">Notes are only available on project exhibits.</p>
+  {% endif %}
 
-  <!-- Notes placeholder -->
-  <div class="mb-6">
-    <p class="text-xs font-medium text-gray-500 mb-2">Notes</p>
-    <p class="text-xs text-gray-400">
-      Trade notes will appear here in Phase 5.
-    </p>
-  </div>
-
-  <div class="border-t border-gray-100 pt-4">
+  <div class="border-t border-gray-100 pt-4 mt-4">
     <!-- AI placeholder -->
     <p class="text-xs font-medium text-gray-500 mb-2">AI Scope Assistant</p>
     <p class="text-xs text-gray-400">

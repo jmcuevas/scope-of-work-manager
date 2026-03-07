@@ -2,6 +2,8 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from notes.forms import NoteForm
+from notes.models import Note
 from projects.models import Project, Trade
 
 from .models import ExhibitSection, ScopeExhibit, ScopeItem
@@ -117,11 +119,34 @@ def exhibit_editor(request, pk):
     for section in sections:
         numbers.update(compute_section_numbering(section))
         items_by_section[section.pk] = flatten_section_items(section)
+
+    # Notes sidebar context
+    notes = Note.objects.none()
+    note_form = None
+    if exhibit.project:
+        try:
+            trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+            from django.db.models import Q
+            notes = (
+                Note.objects
+                .filter(project=exhibit.project)
+                .filter(Q(primary_trade=trade) | Q(related_trades=trade))
+                .select_related('primary_trade__csi_trade', 'created_by', 'resolved_by')
+                .prefetch_related('related_trades__csi_trade')
+                .distinct()
+                .order_by('status', '-created_at')
+            )
+        except Trade.DoesNotExist:
+            pass
+        note_form = NoteForm(project=exhibit.project)
+
     return render(request, 'exhibits/editor.html', {
         'exhibit': exhibit,
         'sections': sections,
         'numbers': numbers,
         'items_by_section': items_by_section,
+        'notes': notes,
+        'form': note_form,
     })
 
 

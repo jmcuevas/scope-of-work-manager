@@ -1,0 +1,62 @@
+<form hx-post="{% url 'notes:note_add' exhibit.pk %}"
+      hx-target="#notes-list"
+      hx-swap="outerHTML"
+      hx-on:htmx:after-request="this.reset()"
+      class="space-y-2 mb-4 pb-4 border-b border-gray-100">
+
+  <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Add Note</p>
+
+  <!-- Text -->
+  <textarea name="text"
+            rows="2"
+            placeholder="Note text…"
+            required
+            class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none"></textarea>
+
+  <!-- Type -->
+  <select name="note_type"
+          required
+          class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+    <option value="">Type…</option>
+    {% for value, label in form.fields.note_type.choices %}
+      {% if value %}<option value="{{ value }}">{{ label }}</option>{% endif %}
+    {% endfor %}
+  </select>
+
+  <!-- Primary trade -->
+  <select name="primary_trade"
+          required
+          class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+    <option value="">Primary trade…</option>
+    {% for trade in form.fields.primary_trade.queryset %}
+      <option value="{{ trade.pk }}">{{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}</option>
+    {% endfor %}
+  </select>
+
+  <!-- Related trades (checkboxes) -->
+  {% if form.fields.related_trades.queryset.exists %}
+  <details class="text-xs text-gray-500">
+    <summary class="cursor-pointer hover:text-gray-700">Related trades (optional)</summary>
+    <div class="mt-1 space-y-1 pl-1">
+      {% for trade in form.fields.related_trades.queryset %}
+      <label class="flex items-center gap-1.5">
+        <input type="checkbox" name="related_trades" value="{{ trade.pk }}"
+               class="rounded border-gray-300 text-primary-600 focus:ring-primary-400">
+        <span>{{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- Source -->
+  <input type="text"
+         name="source"
+         placeholder="Source (e.g. OAC meeting, field walk) — optional"
+         class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+
+  <button type="submit"
+          class="w-full px-3 py-1.5 text-xs font-medium bg-primary-600 hover:bg-primary-700 text-white rounded-md transition-colors">
+    Add Note
+  </button>
+</form>
