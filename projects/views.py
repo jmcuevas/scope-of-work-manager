@@ -127,6 +127,7 @@ def project_edit(request, pk):
 @login_required
 def project_dashboard(request, pk):
     from core.models import User
+    from notes.models import Note
     project = company_project_or_404(pk, request.user)
     trades = (
         project.trades
@@ -141,10 +142,17 @@ def project_dashboard(request, pk):
     for trade in trades:
         status_counts[trade.status] += 1
 
+    open_question_count = Note.objects.filter(
+        project=project,
+        note_type=Note.NoteType.OPEN_QUESTION,
+        status=Note.Status.OPEN,
+    ).count()
+
     return render(request, 'projects/dashboard.html', {
         'project': project,
         'trades': trades,
         'status_counts': status_counts,
         'total_trades': trades.count(),
         'company_users': company_users,
+        'open_question_count': open_question_count,
     })

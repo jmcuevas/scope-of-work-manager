@@ -1,0 +1,15 @@
+<div id="notes-list">
+
+  <!-- Add note form -->
+  {% include "notes/partials/note_form.html" %}
+
+  <!-- Notes -->
+  {% if notes %}
+    {% for note in notes %}
+      {% include "notes/partials/note_card.html" %}
+    {% endfor %}
+  {% else %}
+    <p class="text-xs text-gray-400 italic">No notes for this trade yet.</p>
+  {% endif %}
+
+</div>

@@ -1,0 +1,77 @@
+<div id="note-{{ note.pk }}"
+     class="py-2.5 border-b border-gray-100 last:border-0">
+
+  <form hx-post="{% url 'notes:note_edit' note.pk %}"
+        hx-target="#note-{{ note.pk }}"
+        hx-swap="outerHTML"
+        class="space-y-2">
+    {% csrf_token %}
+
+    <!-- Text -->
+    <textarea name="text"
+              rows="2"
+              required
+              class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none">{{ note.text }}</textarea>
+
+    <!-- Type -->
+    <select name="note_type"
+            required
+            class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+      {% for value, label in form.fields.note_type.choices %}
+        {% if value %}
+          <option value="{{ value }}" {% if note.note_type == value %}selected{% endif %}>{{ label }}</option>
+        {% endif %}
+      {% endfor %}
+    </select>
+
+    <!-- Primary trade -->
+    <select name="primary_trade"
+            required
+            class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+      {% for trade in form.fields.primary_trade.queryset %}
+        <option value="{{ trade.pk }}" {% if note.primary_trade_id == trade.pk %}selected{% endif %}>
+          {{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}
+        </option>
+      {% endfor %}
+    </select>
+
+    <!-- Related trades -->
+    {% if form.fields.related_trades.queryset.exists %}
+    <details {% if note.related_trades.exists %}open{% endif %} class="text-xs text-gray-500">
+      <summary class="cursor-pointer hover:text-gray-700">Related trades (optional)</summary>
+      <div class="mt-1 space-y-1 pl-1">
+        {% for trade in form.fields.related_trades.queryset %}
+        <label class="flex items-center gap-1.5">
+          <input type="checkbox" name="related_trades" value="{{ trade.pk }}"
+                 {% if trade in note.related_trades.all %}checked{% endif %}
+                 class="rounded border-gray-300 text-primary-600 focus:ring-primary-400">
+          <span>{{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    <!-- Source -->
+    <input type="text"
+           name="source"
+           value="{{ note.source }}"
+           placeholder="Source (optional)"
+           class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+
+    <div class="flex items-center gap-2">
+      <button type="submit"
+              class="px-3 py-1 text-xs font-medium bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors">
+        Save
+      </button>
+      <button type="button"
+              hx-get="{% url 'notes:note_edit' note.pk %}?cancel=1"
+              hx-target="#note-{{ note.pk }}"
+              hx-swap="outerHTML"
+              class="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 transition-colors">
+        Cancel
+      </button>
+    </div>
+  </form>
+
+</div>

@@ -222,13 +222,47 @@ Track progress phase by phase. Check items off as completed.
 ## Phase 5: Notes & Cross-Trade Tracking (Week 5–6)
 **Goal**: Notes appear in all relevant trade contexts. Open question count accurate. Dashboard shows open question count.
 
-- [ ] Note creation form (primary trade + related trades + type + source)
-- [ ] Notes sidebar in scope editor (HTMX)
-- [ ] Cross-trade visibility (note tagged to multiple trades appears in each)
-- [ ] Note resolution flow
-- [ ] Project-level open questions view
-- [ ] Open questions badge on buyout dashboard
-- [ ] Tests: cross-trade visibility, company isolation, resolution persistence
+> Note model already exists from Phase 1 — building UI only.
+
+### URL & Routing
+- [x] Create `notes/urls.py` with `app_name = 'notes'` — all note endpoints *(2026-03-06)*
+- [x] Wire `notes/` into `scope_manager/urls.py` *(2026-03-06)*
+
+### Note Creation (HTMX — from scope editor sidebar)
+- [x] `NoteForm` (ModelForm): fields — `text`, `note_type`, `primary_trade`, `related_trades` (checkboxes), `source`; all trade fields filtered to project's trades *(2026-03-06)*
+- [x] `note_add` view (POST): validates form, saves Note with `project` + `created_by`; returns refreshed `note_list` partial *(2026-03-06)*
+- [x] `partials/note_form.html`: compact inline form; related trades in collapsible `<details>`; `hx-post` → `note_add` → swap `#notes-list` *(2026-03-06)*
+
+### Notes Sidebar in Scope Editor
+- [x] `note_list` view (GET): cross-trade queryset — `primary_trade = trade OR trade in related_trades`; ordered OPEN first *(2026-03-06)*
+- [x] `partials/note_list.html`: wraps add form + note cards; `id="notes-list"` is HTMX swap target; empty state *(2026-03-06)*
+- [x] `partials/note_card.html`: type badge color-coded (yellow/blue/gray/green); source, resolution block, inline resolve form in `<details>`, Edit button *(2026-03-06)*
+- [x] Editor right panel updated: replaces Phase 5 placeholder; guards against template exhibits (no project) *(2026-03-06)*
+- [x] `exhibit_editor` view: passes `notes` (cross-trade Q filter) and `form` (NoteForm) on initial load *(2026-03-06)*
+
+### Note Resolution (HTMX)
+- [x] `note_resolve` view (POST): sets `status`, `resolution`, `resolved_by`, `resolved_at`; returns `note_card.html` or empty response when `dismiss=1` (open questions page) *(2026-03-06)*
+
+### Note Edit (HTMX)
+- [x] `note_edit` view (GET/POST): GET returns edit form; `?cancel=1` returns card; POST saves and returns updated card *(2026-03-06)*
+- [x] `partials/note_edit_form.html`: pre-populated form; related trades auto-checked; Cancel → restore card *(2026-03-06)*
+
+### Project-Level Open Questions View
+- [x] `open_questions` view (GET): filters `OPEN_QUESTION + OPEN` for the project; company-scoped 404 *(2026-03-06)*
+- [x] `templates/notes/open_questions.html`: yellow-bordered cards with trade info, age, "Open scope →" link, inline resolve form; resolved items collapse out via `dismiss=1` *(2026-03-06)*
+
+### Open Questions Badge on Buyout Dashboard
+- [x] `project_dashboard` view: counts `OPEN_QUESTION + OPEN` notes, passes `open_question_count` to template *(2026-03-06)*
+- [x] Dashboard header: yellow badge button with count linking to open questions page; hidden when count is zero *(2026-03-06)*
+
+### Tests (`notes/tests.py`) — 20 tests, all passing
+- [x] Note creation: M2M related_trades saved, project + created_by set correctly *(2026-03-06)*
+- [x] Cross-trade visibility: primary and related trade notes appear; unrelated notes excluded *(2026-03-06)*
+- [x] Company isolation: note_list, note_resolve, open_questions all return 404 for wrong company *(2026-03-06)*
+- [x] Resolution: fields set correctly, optional text works, dismiss=1 returns empty response *(2026-03-06)*
+- [x] Open questions view: filters by type + status correctly *(2026-03-06)*
+- [x] Dashboard badge: shows/hides based on count, count matches DB *(2026-03-06)*
+- [x] Auth guards: all endpoints redirect unauthenticated users *(2026-03-06)*
 
 ---
 

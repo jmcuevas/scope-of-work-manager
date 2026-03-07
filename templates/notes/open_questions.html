@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Open Questions — {{ project.name }} — Scope Manager{% endblock %}
+
+{% block breadcrumb %}
+  <a href="{% url 'projects:list' %}" class="hover:text-gray-700">Projects</a>
+  <span class="mx-2">/</span>
+  <a href="{% url 'projects:dashboard' project.pk %}" class="hover:text-gray-700">{{ project.name }}</a>
+  <span class="mx-2">/</span>
+  Open Questions
+{% endblock %}
+
+{% block sidebar %}
+  <a href="{% url 'projects:list' %}"
+     class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-500 hover:bg-gray-50 text-sm transition-colors mb-3">
+    ← Projects
+  </a>
+
+  <div class="px-3 py-2 mb-2">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Current Project</p>
+    <p class="text-sm font-medium text-gray-800">{{ project.name }}</p>
+    {% if project.number %}
+      <p class="text-xs text-gray-400">{{ project.number }}</p>
+    {% endif %}
+  </div>
+
+  <div class="border-t border-gray-100 pt-3 mt-1">
+    <a href="{% url 'projects:dashboard' project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors">
+      Buyout Dashboard
+    </a>
+    <a href="{% url 'notes:open_questions' project.pk %}"
+       class="flex items-center gap-2 px-3 py-2 rounded-lg text-primary-700 bg-primary-50 font-medium text-sm mt-1">
+      Open Questions
+    </a>
+  </div>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-semibold text-gray-800">Open Questions</h1>
+      <p class="text-sm text-gray-500 mt-0.5">{{ project.name }} · {{ notes|length }} unresolved</p>
+    </div>
+  </div>
+
+  {% if notes %}
+  <div class="space-y-3" id="open-questions-list">
+    {% for note in notes %}
+    <div id="oq-note-{{ note.pk }}"
+         class="bg-white rounded-lg border border-yellow-200 p-4">
+
+      <!-- Header row -->
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <p class="text-sm text-gray-800 leading-relaxed flex-1">{{ note.text }}</p>
+        <span class="text-xs font-medium bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded shrink-0">
+          Open Question
+        </span>
+      </div>
+
+      <!-- Meta -->
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 mb-3">
+        <span>
+          <span class="font-medium text-gray-600">Primary:</span>
+          {{ note.primary_trade.csi_trade.csi_code }} — {{ note.primary_trade.csi_trade.name }}
+        </span>
+        {% with rt=note.related_trades.all %}
+          {% if rt %}
+          <span>
+            <span class="font-medium text-gray-600">Also:</span>
+            {% for t in rt %}{{ t.csi_trade.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+          </span>
+          {% endif %}
+        {% endwith %}
+        {% if note.source %}
+          <span>{{ note.source }}</span>
+        {% endif %}
+        <span>{{ note.created_at|timesince }} ago</span>
+        <a href="{% url 'exhibits:trade_scope_open' note.primary_trade.project.pk note.primary_trade.pk %}"
+           class="text-primary-600 hover:text-primary-800 transition-colors">
+          Open scope →
+        </a>
+      </div>
+
+      <!-- Resolve form -->
+      <details>
+        <summary class="text-xs text-green-700 hover:text-green-900 cursor-pointer font-medium">
+          Resolve this question…
+        </summary>
+        <form hx-post="{% url 'notes:note_resolve' note.pk %}"
+              hx-target="#oq-note-{{ note.pk }}"
+              hx-swap="outerHTML"
+              class="mt-2 space-y-2">
+          {% csrf_token %}
+          <input type="hidden" name="dismiss" value="1">
+          <textarea name="resolution"
+                    rows="2"
+                    placeholder="How was this resolved? (optional)"
+                    class="w-full text-sm text-gray-700 border border-gray-200 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none"></textarea>
+          <button type="submit"
+                  class="px-4 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors">
+            Mark Resolved
+          </button>
+        </form>
+      </details>
+
+    </div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="bg-white rounded-lg border border-gray-200 p-10 text-center">
+    <p class="text-gray-500 text-sm font-medium mb-1">No open questions</p>
+    <p class="text-gray-400 text-xs">All questions for this project have been resolved.</p>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
