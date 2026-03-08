@@ -2,6 +2,8 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from ai_services.services import AIDisabledError, AIServiceError, generate_scope_from_description, generate_scope_item
+from django.conf import settings
 from notes.forms import NoteForm
 from notes.models import Note
 from projects.models import Project, Trade
@@ -147,6 +149,7 @@ def exhibit_editor(request, pk):
         'items_by_section': items_by_section,
         'notes': notes,
         'form': note_form,
+        'ai_enabled': settings.AI_ENABLED,
     })
 
 
@@ -166,6 +169,7 @@ def _section_list_response(request, exhibit):
         'sections': sections,
         'numbers': numbers,
         'items_by_section': items_by_section,
+        'ai_enabled': settings.AI_ENABLED,
     })
 
 
@@ -407,3 +411,97 @@ def exhibit_update_status(request, pk):
                     trade.save(update_fields=['status', 'updated_at'])
 
     return redirect('exhibits:editor', pk=exhibit.pk)
+
+
+# ---------------------------------------------------------------------------
+# AI: Generate full scope from description
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_POST
+def exhibit_generate_scope(request, pk):
+    from django.contrib import messages
+    exhibit = _company_exhibit_or_404(pk, request.user)
+
+    try:
+        result = generate_scope_from_description(exhibit)
+    except (AIDisabledError, AIServiceError) as e:
+        messages.error(request, f'AI generation failed: {e}')
+        return _section_list_response(request, exhibit)
+
+    if result is None:
+        messages.error(request, 'AI returned an unexpected response. Please try again.')
+        return _section_list_response(request, exhibit)
+
+    # Match returned section names to existing sections (case-insensitive)
+    sections = {s.name.lower(): s for s in exhibit.sections.all()}
+
+    for section_data in result.get('scope_items', []):
+        section_name = section_data.get('section_name', '').strip()
+        section = sections.get(section_name.lower())
+        if not section:
+            continue  # Skip sections that don't exist in the exhibit
+
+        # Append after any existing items
+        last = section.items.order_by('-order').values_list('order', flat=True).first()
+        next_order = (last + 1) if last is not None else 0
+
+        items_to_create = []
+        for i, item_data in enumerate(section_data.get('items', [])):
+            text = item_data.get('text', '').strip()
+            level = int(item_data.get('level', 0))
+            if not text:
+                continue
+            items_to_create.append(ScopeItem(
+                section=section,
+                text=text,
+                level=level,
+                parent=None,
+                order=next_order + i,
+                is_ai_generated=True,
+                created_by=request.user,
+            ))
+
+        if items_to_create:
+            ScopeItem.objects.bulk_create(items_to_create)
+
+    exhibit.last_edited_by = request.user
+    exhibit.save(update_fields=['last_edited_by', 'updated_at'])
+
+    messages.success(request, 'Scope generated. Review and edit the items below.')
+    return _section_list_response(request, exhibit)
+
+
+# ---------------------------------------------------------------------------
+# AI: Generate a single scope item from plain-language input
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_POST
+def item_generate(request, pk, section_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+
+    input_text = request.POST.get('text', '').strip()
+    if not input_text:
+        return _item_list_response(request, exhibit, section)
+
+    try:
+        exhibit_text = generate_scope_item(input_text, exhibit, section)
+    except (AIDisabledError, AIServiceError):
+        # Fall back to saving the raw input as a plain item
+        exhibit_text = None
+
+    text = exhibit_text or input_text
+    last = section.items.order_by('-order').values_list('order', flat=True).first()
+    last_order = last if last is not None else -1
+    ScopeItem.objects.create(
+        section=section,
+        text=text,
+        level=0,
+        parent=None,
+        order=last_order + 1,
+        is_ai_generated=exhibit_text is not None,
+        created_by=request.user,
+    )
+    return _item_list_response(request, exhibit, section)

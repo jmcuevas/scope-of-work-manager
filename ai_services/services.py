@@ -1,0 +1,202 @@
+import json
+import time
+
+import anthropic
+from django.conf import settings
+
+from .models import AIRequestLog
+from .prompts import SCOPE_FROM_DESCRIPTION_SYSTEM_PROMPT, SCOPE_ITEM_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+class AIDisabledError(Exception):
+    """Raised when AI_ENABLED=False in settings."""
+    pass
+
+
+class AIServiceError(Exception):
+    """Raised when the Claude API call fails after retries."""
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _get_client():
+    return anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+
+def _call_claude(system_prompt, user_prompt, exhibit=None, request_type=None):
+    """
+    Send a request to Claude and return the response text.
+
+    - 30 second timeout per attempt
+    - Retries once on server errors (5xx)
+    - Logs every attempt to AIRequestLog (success or failure)
+    - Raises AIServiceError if all attempts fail
+    """
+    client = _get_client()
+    last_error = None
+
+    for attempt in range(2):  # try twice
+        start = time.monotonic()
+        try:
+            response = client.messages.create(
+                model='claude-sonnet-4-6',
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{'role': 'user', 'content': user_prompt}],
+            )
+            latency_ms = int((time.monotonic() - start) * 1000)
+            tokens = response.usage.input_tokens + response.usage.output_tokens
+
+            AIRequestLog.objects.create(
+                request_type=request_type,
+                exhibit=exhibit,
+                success=True,
+                tokens_used=tokens,
+                latency_ms=latency_ms,
+            )
+            return response.content[0].text
+
+        except anthropic.APITimeoutError as e:
+            last_error = 'Request timed out. Please try again.'
+            break  # No point retrying a timeout
+
+        except anthropic.APIStatusError as e:
+            last_error = str(e)
+            # Only retry on server errors (5xx); fail immediately on 4xx
+            if e.status_code < 500:
+                break
+
+        except Exception as e:
+            last_error = str(e)
+            break
+
+    latency_ms = int((time.monotonic() - start) * 1000)
+    AIRequestLog.objects.create(
+        request_type=request_type,
+        exhibit=exhibit,
+        success=False,
+        error_message=last_error or 'Unknown error',
+        latency_ms=latency_ms,
+    )
+    raise AIServiceError(last_error or 'AI request failed')
+
+
+def _parse_json_response(text):
+    """
+    Parse JSON from Claude's response text.
+    Returns the parsed dict, or None if parsing fails.
+    """
+    try:
+        # Strip markdown code fences if Claude added them despite instructions
+        text = text.strip()
+        if text.startswith('```'):
+            text = text.split('\n', 1)[1]
+            text = text.rsplit('```', 1)[0]
+        return json.loads(text)
+    except (json.JSONDecodeError, IndexError):
+        return None
+
+
+def _build_existing_scope_context(exhibit):
+    """Build a plain-text summary of the exhibit's current sections and items."""
+    from exhibits.services import flatten_section_items
+    lines = []
+    for section in exhibit.sections.order_by('order'):
+        lines.append(f'\nSection: {section.name}')
+        for item in flatten_section_items(section):
+            indent = '  ' * item.level
+            lines.append(f'{indent}- {item.text}')
+    return '\n'.join(lines) if lines else 'No items yet.'
+
+
+# ---------------------------------------------------------------------------
+# Public service functions
+# ---------------------------------------------------------------------------
+
+def generate_scope_from_description(exhibit):
+    """
+    Generate a full set of scope items for an exhibit based on its
+    scope description, trade, and project context.
+
+    Returns a dict:
+        {"scope_items": [{"section_name": "...", "items": [{"text": "...", "level": 0}]}]}
+    or None if the response could not be parsed.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    project = exhibit.project
+    section_names = list(exhibit.sections.order_by('order').values_list('name', flat=True))
+    existing_scope = _build_existing_scope_context(exhibit)
+
+    user_prompt = f"""
+Generate scope items for the following exhibit.
+
+TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+PROJECT TYPE: {project.project_type if project and project.project_type else 'Not specified'}
+PROJECT DESCRIPTION: {project.description if project and project.description else 'Not provided'}
+SCOPE DESCRIPTION: {exhibit.scope_description or 'Not provided'}
+
+AVAILABLE SECTIONS (use only these names):
+{chr(10).join(f'- {name}' for name in section_names)}
+
+EXISTING SCOPE (do not duplicate these items):
+{existing_scope}
+""".strip()
+
+    text = _call_claude(
+        system_prompt=SCOPE_FROM_DESCRIPTION_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.SCOPE_FROM_DESCRIPTION,
+    )
+    return _parse_json_response(text)
+
+
+def generate_scope_item(input_text, exhibit, section):
+    """
+    Convert a PM's plain-language note into a single polished scope item.
+
+    Returns the exhibit_text string, or None if the response could not be parsed.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    existing_scope = _build_existing_scope_context(exhibit)
+
+    user_prompt = f"""
+Rewrite the following note as a single scope item.
+
+TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+SECTION: {section.name}
+PM'S NOTE: {input_text}
+
+EXISTING SCOPE CONTEXT (for reference — do not duplicate):
+{existing_scope}
+""".strip()
+
+    text = _call_claude(
+        system_prompt=SCOPE_ITEM_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.SCOPE_ITEM,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None:
+        return None
+    return parsed.get('exhibit_text', '').strip() or None
