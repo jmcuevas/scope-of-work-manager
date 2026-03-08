@@ -104,6 +104,26 @@
         </button>
       </div>
     </form>
+
+    {% if ai_enabled %}
+    <div class="border-t border-gray-100 pt-3 mt-2">
+      {% if exhibit.scope_description %}
+      <form hx-post="{% url 'exhibits:generate_scope' exhibit.pk %}"
+            hx-target="#section-list"
+            hx-swap="innerHTML"
+            hx-indicator="#ai-spinner">
+        {% csrf_token %}
+        <button type="submit"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 rounded-md transition-colors">
+          <span id="ai-spinner" class="htmx-indicator">⏳</span>
+          ✨ Generate Scope with AI
+        </button>
+      </form>
+      {% else %}
+      <p class="text-xs text-gray-400 italic">Save a scope description above to enable AI generation.</p>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
 
   <!-- Section list -->
@@ -134,13 +154,14 @@
     <p class="text-xs text-gray-400 italic">Notes are only available on project exhibits.</p>
   {% endif %}
 
+  {% if ai_enabled %}
   <div class="border-t border-gray-100 pt-4 mt-4">
-    <!-- AI placeholder -->
     <p class="text-xs font-medium text-gray-500 mb-2">AI Scope Assistant</p>
     <p class="text-xs text-gray-400">
-      AI scope generation coming in Phase 6.
+      Use ✨ Generate Scope to fill sections from your description, or type plain-language notes into the Ask AI input in each section.
     </p>
   </div>
+  {% endif %}
 
 </aside>
 {% endblock %}

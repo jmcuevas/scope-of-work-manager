@@ -63,4 +63,6 @@ urlpatterns = [
     # Exhibit-level actions
     path('<int:pk>/save-as-template/', views.exhibit_save_as_template, name='save_as_template'),
     path('<int:pk>/status/', views.exhibit_update_status, name='update_status'),
+    path('<int:pk>/generate-scope/', views.exhibit_generate_scope, name='generate_scope'),
+    path('<int:pk>/sections/<int:section_pk>/items/generate/', views.item_generate, name='item_generate'),
 ]

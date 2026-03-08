@@ -269,15 +269,48 @@ Track progress phase by phase. Check items off as completed.
 ## Phase 6: AI Scope Assistant (Week 6–7)
 **Goal**: Both AI functions work end-to-end. Failures degrade gracefully. PM can complete any exhibit with or without AI.
 
-- [ ] `generate_scope_from_description()` — description → exhibit sections + items
-- [ ] `generate_scope_item()` — natural language → single inclusion/exclusion
-- [ ] System prompts with exhibit language conventions + JSON output schema
-- [ ] Response parsing with fallback on malformed JSON
-- [ ] Error handling: 30s timeout, 1 retry on 5xx, graceful failure message
-- [ ] `AIRequestLog` model for metrics (tokens, latency, success/failure — no prompt text)
-- [ ] Editor integration: "Generate Scope" button + per-section NL input → preview → accept/edit/reject
-- [ ] Tests with mocked API (no real API calls in tests)
-- [ ] Feature flag: all workflows function with `AI_ENABLED=False`
+> `AI_ENABLED` flag and `ANTHROPIC_API_KEY` are already in settings. `ai_services/` app already exists — building the service layer and UI on top.
+
+### AIRequestLog Model
+- [x] Add `AIRequestLog` model to `ai_services/models.py` with fields: `request_type` (SCOPE_FROM_DESCRIPTION or SCOPE_ITEM), `exhibit` (FK → ScopeExhibit, nullable), `success` (boolean), `error_message` (text, blank), `tokens_used` (int, nullable), `latency_ms` (int, nullable), `created_at` *(2026-03-08)*
+- [x] Register `AIRequestLog` in `ai_services/admin.py` *(2026-03-08)*
+- [x] Generate and apply migration *(2026-03-08)*
+
+### AI Service Layer (`ai_services/services.py`)
+- [x] Install `anthropic` package (`pip install anthropic`) and verify it's importable *(2026-03-08)*
+- [x] Write a shared `_call_claude(system_prompt, user_prompt)` helper: retries once on 5xx errors, returns the text response or raises a clear exception; logs every call to `AIRequestLog` (success/failure, tokens, latency) *(2026-03-08)*
+- [x] Write `generate_scope_from_description(exhibit)`: builds user prompt with trade, project type, description, scope description, and existing sections; asks Claude to return structured JSON; returns the parsed dict *(2026-03-08)*
+- [x] Write `generate_scope_item(input_text, exhibit, section)`: sends the PM's plain-language note plus trade/section context; asks Claude to rewrite as a single polished exhibit line; returns the standardized text string *(2026-03-08)*
+- [x] Write `_parse_json_response(text)`: strips markdown fences, wraps `json.loads()` with try/except; returns `None` on failure *(2026-03-08)*
+- [x] Both functions check `settings.AI_ENABLED` first and raise `AIDisabledError` if the flag is off *(2026-03-08)*
+
+### Editor Integration 1 — "Generate Scope" (full exhibit from description)
+- [x] Add a "Generate Scope" button to `editor.html` — visible only when `AI_ENABLED` is True and `exhibit.scope_description` is not empty *(2026-03-08)*
+- [x] Write `exhibit_generate_scope` view: calls `generate_scope_from_description(exhibit)`; matches sections by name (case-insensitive); bulk-creates `ScopeItem` records with `is_ai_generated=True`; returns refreshed `section_list` partial *(2026-03-08)*
+- [x] Show loading spinner on the button while HTMX request is in flight (`hx-indicator`) *(2026-03-08)*
+- [x] On AI failure, return section list unchanged with a Django flash message *(2026-03-08)*
+- [x] Add URL for this view in `exhibits/urls.py` *(2026-03-08)*
+
+### Editor Integration 2 — Per-Section Item Generation
+- [x] Add "Ask AI…" input to each section's footer in `section.html` — visible only when `AI_ENABLED` is True *(2026-03-08)*
+- [x] Write `item_generate` view: calls `generate_scope_item()`, creates a `ScopeItem` with `is_ai_generated=True`; falls back to raw input text on AI failure *(2026-03-08)*
+- [x] Add URL for this view in `exhibits/urls.py` *(2026-03-08)*
+
+### Feature Flag Guard
+- [x] All AI UI elements wrapped in `{% if ai_enabled %}` in `editor.html` and `section.html` *(2026-03-08)*
+- [x] `ai_enabled` passed from `exhibit_editor` view context and `_section_list_response` helper *(2026-03-08)*
+
+### Tests (`ai_services/tests.py`) — all with mocked API, no real calls
+- [x] `generate_scope_from_description()` returns correctly structured dict when API returns valid JSON *(2026-03-08)*
+- [x] `generate_scope_from_description()` returns `None` gracefully when API returns malformed JSON *(2026-03-08)*
+- [x] `generate_scope_item()` returns a cleaned string when API responds correctly *(2026-03-08)*
+- [x] `_call_claude()` retries once on a simulated 5xx error then succeeds *(2026-03-08)*
+- [x] `_call_claude()` logs a failed `AIRequestLog` record when all retries fail *(2026-03-08)*
+- [x] `exhibit_generate_scope` view creates `ScopeItem` records with `is_ai_generated=True` *(2026-03-08)*
+- [x] `exhibit_generate_scope` view skips unmatched section names *(2026-03-08)*
+- [x] `item_generate` view falls back to raw input on AI failure *(2026-03-08)*
+- [x] All AI views return 404 for another company's exhibit (company isolation) *(2026-03-08)*
+- [x] With `AI_ENABLED=False`, both service functions raise `AIDisabledError` *(2026-03-08)*
 
 ---
 

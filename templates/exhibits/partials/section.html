@@ -71,4 +71,27 @@
     </form>
   </div>
 
+  {% if ai_enabled %}
+  <!-- Ask AI form -->
+  <div class="px-4 py-2.5 border-t border-gray-100 bg-primary-50">
+    <form hx-post="{% url 'exhibits:item_generate' exhibit.pk section.pk %}"
+          hx-target="#items-{{ section.pk }}"
+          hx-swap="innerHTML"
+          hx-indicator="#ai-item-spinner-{{ section.pk }}"
+          hx-on:htmx:after-request="this.reset()"
+          class="flex items-center gap-2">
+      <span class="text-xs text-primary-400 shrink-0">✨</span>
+      <input type="text"
+             name="text"
+             placeholder="Describe an item in plain language — AI will polish it..."
+             class="flex-1 text-sm text-gray-600 placeholder-gray-400 border-0 focus:outline-none focus:ring-0 py-1 bg-transparent">
+      <span id="ai-item-spinner-{{ section.pk }}" class="htmx-indicator text-xs text-primary-400">⏳</span>
+      <button type="submit"
+              class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors whitespace-nowrap">
+        Ask AI
+      </button>
+    </form>
+  </div>
+  {% endif %}
+
 </div>
