@@ -6,8 +6,31 @@ from django.views.decorators.http import require_POST
 from exhibits.models import ScopeExhibit
 from projects.models import Project
 
+from exhibits.services import compute_section_numbering
 from .forms import NoteForm
 from .models import Note
+
+
+def _current_trade(exhibit):
+    """Return the Trade for this exhibit's project+csi_trade, or None."""
+    if not exhibit.project:
+        return None
+    from projects.models import Trade
+    try:
+        return Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+    except Trade.DoesNotExist:
+        return None
+
+
+def _item_numbers_for_notes(notes):
+    """Build {item_pk: number_string} for all notes that reference a scope item."""
+    numbers = {}
+    seen_sections = set()
+    for note in notes:
+        if note.scope_item_id and note.scope_item.section_id not in seen_sections:
+            seen_sections.add(note.scope_item.section_id)
+            numbers.update(compute_section_numbering(note.scope_item.section))
+    return numbers
 
 
 def _get_exhibit(exhibit_pk, user):
@@ -31,10 +54,11 @@ def _notes_for_exhibit(exhibit):
         .filter(
             models.Q(primary_trade=trade) | models.Q(related_trades=trade)
         )
-        .select_related('primary_trade__csi_trade', 'created_by', 'resolved_by')
+        .select_related('primary_trade__csi_trade', 'created_by', 'resolved_by',
+                        'scope_item__section')
         .prefetch_related('related_trades__csi_trade')
         .distinct()
-        .order_by('status', '-created_at')  # OPEN sorts before RESOLVED alphabetically
+        .order_by('status', '-created_at')
     )
 
 
@@ -53,6 +77,8 @@ def note_list(request, exhibit_pk):
         'notes': notes,
         'form': form,
         'project_trades': project_trades,
+        'numbers': _item_numbers_for_notes(notes),
+        'current_trade': _current_trade(exhibit),
     })
 
 
@@ -69,6 +95,16 @@ def note_add(request, exhibit_pk):
         note = form.save(commit=False)
         note.project = exhibit.project
         note.created_by = request.user
+        scope_item_id = request.POST.get('scope_item_id')
+        if scope_item_id:
+            from exhibits.models import ScopeItem
+            try:
+                note.scope_item = ScopeItem.objects.get(
+                    pk=scope_item_id,
+                    section__scope_exhibit__company=request.user.company,
+                )
+            except ScopeItem.DoesNotExist:
+                pass
         note.save()
         form.save_m2m()
     # Always return the refreshed notes list (even on invalid — keeps UX simple)
@@ -78,6 +114,8 @@ def note_add(request, exhibit_pk):
         'exhibit': exhibit,
         'notes': notes,
         'form': fresh_form,
+        'numbers': _item_numbers_for_notes(notes),
+        'current_trade': _current_trade(exhibit),
     })
 
 

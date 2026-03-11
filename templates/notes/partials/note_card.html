@@ -1,3 +1,4 @@
+{% load exhibit_tags %}
 <div id="note-{{ note.pk }}"
      class="py-2.5 border-b border-gray-100 last:border-0">
 
@@ -5,6 +6,19 @@
   <div class="flex justify-end mb-1">
     <span class="text-xs text-green-600 font-medium">✓ Resolved</span>
   </div>
+  {% endif %}
+
+  <!-- Scope item reference -->
+  {% if note.scope_item %}
+  {% with item_number=numbers|get_item:note.scope_item.pk %}
+  <button type="button"
+          onclick="highlightItem({{ note.scope_item.pk }})"
+          class="w-full text-left mb-1.5 bg-gray-50 hover:bg-primary-50 border border-gray-100 hover:border-primary-200 rounded px-2 py-1 transition-colors group/ref">
+    <p class="text-xs text-gray-400 group-hover/ref:text-primary-600 font-medium truncate">
+      {{ note.scope_item.section.name }}{% if item_number %} — {{ item_number }}{% endif %}
+    </p>
+  </button>
+  {% endwith %}
   {% endif %}
 
   <!-- Note text -->
