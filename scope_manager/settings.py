@@ -149,3 +149,17 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AI_ENABLED = os.environ.get('AI_ENABLED', 'True') == 'True'
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+
+
+# Sentry error tracking (disabled if SENTRY_DSN is not set)
+
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '')
+
+if SENTRY_DSN:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.environ.get('DJANGO_ENV', 'production'),
+        traces_sample_rate=0.2,  # 20% of transactions for performance monitoring
+        send_default_pii=False,
+    )

@@ -1,0 +1,45 @@
+<div id="review-panel">
+
+  {% if not review %}
+    <p class="text-xs text-gray-400">No review run yet.</p>
+  {% else %}
+    {% with items=review.items.all %}
+
+      <!-- Scorecard badges -->
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        {% regroup items by status as by_status %}
+        {% for group in by_status %}
+          {% if group.grouper == 'PASS' %}
+            <span class="text-xs font-medium text-green-700 bg-green-50 rounded-full px-2 py-0.5">✅ {{ group.list|length }} passed</span>
+          {% elif group.grouper == 'WARNING' %}
+            <span class="text-xs font-medium text-yellow-700 bg-yellow-50 rounded-full px-2 py-0.5">⚠️ {{ group.list|length }} warning{{ group.list|length|pluralize }}</span>
+          {% elif group.grouper == 'FAIL' %}
+            <span class="text-xs font-medium text-red-700 bg-red-50 rounded-full px-2 py-0.5">❌ {{ group.list|length }} failed</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      <!-- Items grouped by check type -->
+      {% regroup items by check_type as by_type %}
+      {% for group in by_type %}
+        <div class="mb-3">
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            {% if group.grouper == 'OPEN_NOTE' %}Open Notes
+            {% elif group.grouper == 'CROSS_TRADE' %}Cross-Trade Notes
+            {% elif group.grouper == 'CUSTOM_CHECKLIST' %}Checklist
+            {% endif %}
+          </p>
+          {% for item in group.list %}
+            {% include "reviews/partials/review_item.html" %}
+          {% endfor %}
+        </div>
+      {% endfor %}
+
+      <p class="text-xs text-gray-400 mt-1">
+        Run {{ review.completed_at|date:"M j, g:i a" }} by {{ review.initiated_by.get_full_name|default:review.initiated_by.email }}
+      </p>
+
+    {% endwith %}
+  {% endif %}
+
+</div>

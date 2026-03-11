@@ -142,6 +142,12 @@ def exhibit_editor(request, pk):
             pass
         note_form = NoteForm(project=exhibit.project)
 
+    latest_review = (
+        exhibit.final_reviews
+        .prefetch_related('items')
+        .first()
+    )
+
     return render(request, 'exhibits/editor.html', {
         'exhibit': exhibit,
         'sections': sections,
@@ -150,6 +156,7 @@ def exhibit_editor(request, pk):
         'notes': notes,
         'form': note_form,
         'ai_enabled': settings.AI_ENABLED,
+        'latest_review': latest_review,
     })
 
 

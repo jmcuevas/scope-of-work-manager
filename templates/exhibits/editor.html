@@ -163,5 +163,24 @@
   </div>
   {% endif %}
 
+  <!-- Final Review -->
+  <div class="border-t border-gray-100 pt-4 mt-4">
+    <div class="flex items-center justify-between mb-2">
+      <p class="text-xs font-medium text-gray-500">Final Review</p>
+      <form hx-post="{% url 'reviews:run' exhibit.pk %}"
+            hx-target="#review-panel"
+            hx-swap="outerHTML"
+            hx-indicator="#review-spinner">
+        {% csrf_token %}
+        <button type="submit"
+                class="flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors">
+          <span id="review-spinner" class="htmx-indicator">⏳</span>
+          Run Check
+        </button>
+      </form>
+    </div>
+    {% include "reviews/partials/review_panel.html" with review=latest_review %}
+  </div>
+
 </aside>
 {% endblock %}
