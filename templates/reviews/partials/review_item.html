@@ -1,0 +1,42 @@
+<div id="review-item-{{ item.pk }}" class="py-2.5 border-b border-gray-100 last:border-0">
+
+  <div class="flex items-start gap-2 mb-1">
+    {% if item.status == 'PASS' %}
+      <span class="text-xs mt-0.5 shrink-0">✅</span>
+    {% elif item.status == 'WARNING' %}
+      <span class="text-xs mt-0.5 shrink-0">⚠️</span>
+    {% else %}
+      <span class="text-xs mt-0.5 shrink-0">❌</span>
+    {% endif %}
+    <p class="text-xs text-gray-700 leading-snug">{{ item.description }}</p>
+  </div>
+
+  {% if item.status != 'PASS' %}
+    {% if item.pm_response and not edit_mode %}
+      <div class="ml-5 flex items-center gap-1">
+        <p class="text-xs text-primary-700 italic flex-1">✓ {{ item.pm_response }}</p>
+        <button hx-get="{% url 'reviews:item_respond' exhibit.pk item.pk %}?edit=1"
+                hx-target="#review-item-{{ item.pk }}"
+                hx-swap="outerHTML"
+                class="text-xs text-gray-400 hover:text-gray-600 shrink-0">edit</button>
+      </div>
+    {% else %}
+      <form hx-post="{% url 'reviews:item_respond' exhibit.pk item.pk %}"
+            hx-target="#review-item-{{ item.pk }}"
+            hx-swap="outerHTML"
+            class="ml-5 flex gap-1 mt-1">
+        {% csrf_token %}
+        <input type="text"
+               name="pm_response"
+               value="{{ item.pm_response }}"
+               placeholder="Add a note..."
+               class="flex-1 text-xs text-gray-600 placeholder-gray-300 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-300">
+        <button type="submit"
+                class="text-xs text-primary-600 hover:text-primary-800 whitespace-nowrap px-1">
+          Save
+        </button>
+      </form>
+    {% endif %}
+  {% endif %}
+
+</div>
