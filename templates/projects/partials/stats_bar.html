@@ -1,10 +1,10 @@
 {% with counts=status_counts %}
 <div id="stats-bar"
      hx-get="{% url 'projects:stats' project.pk %}"
-     hx-trigger="statsChanged from:body"
+     hx-trigger="statsChanged"
      hx-target="#stats-bar"
      hx-swap="outerHTML"
-     class="grid grid-cols-5 gap-3 mb-6">
+     class="grid grid-cols-7 gap-3 mb-6">
   <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
     <p class="text-2xl font-semibold text-gray-800">{{ total_trades }}</p>
     <p class="text-xs text-gray-500 mt-0.5">Total</p>
@@ -14,16 +14,24 @@
     <p class="text-xs text-gray-500 mt-0.5">Not Started</p>
   </div>
   <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
-    <p class="text-2xl font-semibold text-blue-600">{{ counts.SCOPE_IN_PROGRESS }}</p>
-    <p class="text-xs text-gray-500 mt-0.5">In Progress</p>
+    <p class="text-2xl font-semibold text-blue-600">{{ counts.DRAFTING }}</p>
+    <p class="text-xs text-gray-500 mt-0.5">Drafting</p>
   </div>
   <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
     <p class="text-2xl font-semibold text-yellow-600">{{ counts.OUT_TO_BID }}</p>
     <p class="text-xs text-gray-500 mt-0.5">Out to Bid</p>
   </div>
   <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
-    <p class="text-2xl font-semibold text-green-600">{{ counts.SUBCONTRACT_ISSUED }}</p>
-    <p class="text-xs text-gray-500 mt-0.5">Subcontract Issued</p>
+    <p class="text-2xl font-semibold text-orange-600">{{ counts.BIDS_RECEIVED }}</p>
+    <p class="text-xs text-gray-500 mt-0.5">Bids Received</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+    <p class="text-2xl font-semibold text-purple-600">{{ counts.OWNER_REVIEW }}</p>
+    <p class="text-xs text-gray-500 mt-0.5">Owner Review</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center">
+    <p class="text-2xl font-semibold text-green-600">{{ counts.SUBCONTRACTOR_APPROVED }}</p>
+    <p class="text-xs text-gray-500 mt-0.5">Sub Approved</p>
   </div>
 </div>
 {% endwith %}

@@ -309,7 +309,7 @@ class TestExhibitStart:
         url = reverse('exhibits:exhibit_start', args=[project.pk, trade.pk])
         client.post(url, {'source': 'blank'})
         trade.refresh_from_db()
-        assert trade.status == Trade.Status.SCOPE_IN_PROGRESS
+        assert trade.status == Trade.Status.DRAFTING
 
     def test_company_isolation(self, client):
         user_a = PMUserFactory()
@@ -482,7 +482,7 @@ class TestExhibitStatusTransitions:
         user = PMUserFactory()
         _login(client, user)
         trade, exhibit = _make_trade_with_exhibit(user)
-        trade.status = Trade.Status.SCOPE_IN_PROGRESS
+        trade.status = Trade.Status.DRAFTING
         trade.save()
         return user, trade, exhibit
 
@@ -493,28 +493,28 @@ class TestExhibitStatusTransitions:
         trade.refresh_from_db()
         assert trade.status == Trade.Status.OUT_TO_BID
 
-    def test_finalized_advances_trade_to_subcontract_issued(self, client):
+    def test_finalized_advances_trade_to_subcontractor_approved(self, client):
         _, trade, exhibit = self._setup(client)
         url = reverse('exhibits:update_status', args=[exhibit.pk])
         client.post(url, {'status': 'FINALIZED'})
         trade.refresh_from_db()
-        assert trade.status == Trade.Status.SUBCONTRACT_ISSUED
+        assert trade.status == Trade.Status.SUBCONTRACTOR_APPROVED
 
     def test_draft_does_not_change_trade_status(self, client):
         _, trade, exhibit = self._setup(client)
         url = reverse('exhibits:update_status', args=[exhibit.pk])
         client.post(url, {'status': 'DRAFT'})
         trade.refresh_from_db()
-        assert trade.status == Trade.Status.SCOPE_IN_PROGRESS
+        assert trade.status == Trade.Status.DRAFTING
 
     def test_status_never_regresses_trade(self, client):
         _, trade, exhibit = self._setup(client)
-        trade.status = Trade.Status.SUBCONTRACT_ISSUED
+        trade.status = Trade.Status.SUBCONTRACTOR_APPROVED
         trade.save()
         url = reverse('exhibits:update_status', args=[exhibit.pk])
         client.post(url, {'status': 'READY_FOR_BID'})
         trade.refresh_from_db()
-        assert trade.status == Trade.Status.SUBCONTRACT_ISSUED
+        assert trade.status == Trade.Status.SUBCONTRACTOR_APPROVED
 
     def test_company_isolation_on_status_update(self, client):
         user_b = PMUserFactory()

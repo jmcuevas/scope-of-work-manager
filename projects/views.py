@@ -62,7 +62,8 @@ def _build_status_counts(project):
     trades = project.trades.all()
     counts = {s.value: 0 for s in Trade.Status}
     for t in trades:
-        counts[t.status] += 1
+        if t.status in counts:
+            counts[t.status] += 1
     return counts, trades.count()
 
 
@@ -140,7 +141,8 @@ def project_dashboard(request, pk):
     from .models import Trade as TradeModel
     status_counts = {s.value: 0 for s in TradeModel.Status}
     for trade in trades:
-        status_counts[trade.status] += 1
+        if trade.status in status_counts:
+            status_counts[trade.status] += 1
 
     open_question_count = Note.objects.filter(
         project=project,

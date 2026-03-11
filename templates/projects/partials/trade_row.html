@@ -1,11 +1,13 @@
 {% load trade_tags %}
 <tr class="hover:bg-gray-50 transition-colors" id="trade-{{ trade.pk }}">
 
-  <!-- CSI Code -->
-  <td class="px-5 py-3 text-gray-500 font-mono text-xs">{{ trade.csi_trade.csi_code }}</td>
-
-  <!-- Trade Name -->
-  <td class="px-5 py-3 font-medium text-gray-800">{{ trade.csi_trade.name }}</td>
+  <!-- Trade -->
+  <td class="px-5 py-3">
+    <a href="{% url 'exhibits:trade_scope_open' trade.project.pk trade.pk %}"
+       class="font-medium text-gray-800 hover:text-primary-600 transition-colors">
+      <span class="font-mono text-xs text-gray-500">{{ trade.csi_trade.csi_code }}</span> — {{ trade.csi_trade.name }}
+    </a>
+  </td>
 
   <!-- Budget -->
   <td class="px-5 py-3 text-right text-gray-600">
@@ -41,12 +43,5 @@
     </select>
   </td>
 
-  <!-- Open Scope link -->
-  <td class="px-5 py-3 text-right">
-    <a href="{% url 'exhibits:trade_scope_open' trade.project.pk trade.pk %}"
-       class="text-primary-600 hover:text-primary-800 text-xs font-medium transition-colors">
-      Open Scope →
-    </a>
-  </td>
 
 </tr>
