@@ -95,7 +95,7 @@ def exhibit_start(request, project_pk, trade_pk):
         exhibit = clone_exhibit(source_exhibit, trade, request.user)
 
     if trade.status == Trade.Status.NOT_STARTED:
-        trade.status = Trade.Status.SCOPE_IN_PROGRESS
+        trade.status = Trade.Status.DRAFTING
         trade.save(update_fields=['status', 'updated_at'])
 
     return redirect('exhibits:editor', pk=exhibit.pk)
@@ -400,14 +400,15 @@ def exhibit_update_status(request, pk):
         if trade:
             STATUS_SYNC = {
                 ScopeExhibit.Status.READY_FOR_BID: Trade.Status.OUT_TO_BID,
-                ScopeExhibit.Status.FINALIZED: Trade.Status.SUBCONTRACT_ISSUED,
+                ScopeExhibit.Status.FINALIZED: Trade.Status.SUBCONTRACTOR_APPROVED,
             }
             trade_status_order = [
                 Trade.Status.NOT_STARTED,
-                Trade.Status.SCOPE_IN_PROGRESS,
+                Trade.Status.DRAFTING,
                 Trade.Status.OUT_TO_BID,
                 Trade.Status.BIDS_RECEIVED,
-                Trade.Status.SUBCONTRACT_ISSUED,
+                Trade.Status.OWNER_REVIEW,
+                Trade.Status.SUBCONTRACTOR_APPROVED,
             ]
             target_trade_status = STATUS_SYNC.get(new_status)
             if target_trade_status:

@@ -29,10 +29,11 @@ class Project(models.Model):
 class Trade(models.Model):
     class Status(models.TextChoices):
         NOT_STARTED = 'NOT_STARTED', 'Not Started'
-        SCOPE_IN_PROGRESS = 'SCOPE_IN_PROGRESS', 'Scope In Progress'
+        DRAFTING = 'DRAFTING', 'Drafting'
         OUT_TO_BID = 'OUT_TO_BID', 'Out to Bid'
         BIDS_RECEIVED = 'BIDS_RECEIVED', 'Bids Received'
-        SUBCONTRACT_ISSUED = 'SUBCONTRACT_ISSUED', 'Subcontract Issued'
+        OWNER_REVIEW = 'OWNER_REVIEW', 'Owner Review'
+        SUBCONTRACTOR_APPROVED = 'SUBCONTRACTOR_APPROVED', 'Subcontractor Approved'
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='trades')
     csi_trade = models.ForeignKey(

@@ -31,11 +31,9 @@
         <thead class="bg-gray-50 border-b border-gray-200">
           <tr>
             <th class="text-left px-5 py-3 font-medium text-gray-600">Project</th>
-            <th class="text-left px-5 py-3 font-medium text-gray-600">Number</th>
             <th class="text-left px-5 py-3 font-medium text-gray-600">Type</th>
             <th class="text-center px-5 py-3 font-medium text-gray-600">Trades</th>
             <th class="text-left px-5 py-3 font-medium text-gray-600">Created by</th>
-            <th class="px-5 py-3"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-100">
@@ -44,10 +42,9 @@
             <td class="px-5 py-4">
               <a href="{% url 'projects:dashboard' project.pk %}"
                  class="font-medium text-gray-800 hover:text-primary-600 transition-colors">
-                {{ project.name }}
+                {% if project.number %}{{ project.number }} — {% endif %}{{ project.name }}
               </a>
             </td>
-            <td class="px-5 py-4 text-gray-500">{{ project.number|default:"—" }}</td>
             <td class="px-5 py-4 text-gray-500">{{ project.project_type }}</td>
             <td class="px-5 py-4 text-center">
               <span class="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
@@ -56,10 +53,6 @@
             </td>
             <td class="px-5 py-4 text-gray-500">
               {{ project.created_by.get_full_name|default:project.created_by.email }}
-            </td>
-            <td class="px-5 py-4 text-right">
-              <a href="{% url 'projects:edit' project.pk %}"
-                 class="text-gray-400 hover:text-gray-600 text-xs transition-colors">Edit</a>
             </td>
           </tr>
           {% endfor %}
