@@ -1,20 +1,11 @@
 <div id="note-{{ note.pk }}"
      class="py-2.5 border-b border-gray-100 last:border-0">
 
-  <!-- Type badge + status -->
-  <div class="flex items-center justify-between mb-1">
-    <span class="text-xs font-medium px-1.5 py-0.5 rounded
-      {% if note.note_type == 'OPEN_QUESTION' %}bg-yellow-100 text-yellow-700
-      {% elif note.note_type == 'SCOPE_CLARIFICATION' %}bg-blue-100 text-blue-700
-      {% elif note.note_type == 'MEANS_METHODS' %}bg-gray-100 text-gray-600
-      {% elif note.note_type == 'OWNER_ARCHITECT_DIRECTION' %}bg-green-100 text-green-700
-      {% endif %}">
-      {{ note.get_note_type_display }}
-    </span>
-    {% if note.status == 'RESOLVED' %}
-      <span class="text-xs text-green-600 font-medium">✓ Resolved</span>
-    {% endif %}
+  {% if note.status == 'RESOLVED' %}
+  <div class="flex justify-end mb-1">
+    <span class="text-xs text-green-600 font-medium">✓ Resolved</span>
   </div>
+  {% endif %}
 
   <!-- Note text -->
   <p class="text-xs text-gray-700 leading-relaxed mb-1">{{ note.text }}</p>

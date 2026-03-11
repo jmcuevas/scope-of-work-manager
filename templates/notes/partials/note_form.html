@@ -13,15 +13,7 @@
             required
             class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none"></textarea>
 
-  <!-- Type -->
-  <select name="note_type"
-          required
-          class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
-    <option value="">Type…</option>
-    {% for value, label in form.fields.note_type.choices %}
-      {% if value %}<option value="{{ value }}">{{ label }}</option>{% endif %}
-    {% endfor %}
-  </select>
+  <input type="hidden" name="note_type" value="SCOPE_CLARIFICATION">
 
   <!-- Primary trade -->
   <select name="primary_trade"
@@ -29,7 +21,9 @@
           class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
     <option value="">Primary trade…</option>
     {% for trade in form.fields.primary_trade.queryset %}
-      <option value="{{ trade.pk }}">{{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}</option>
+      <option value="{{ trade.pk }}" {% if current_trade and trade.pk == current_trade.pk %}selected{% endif %}>
+        {{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}
+      </option>
     {% endfor %}
   </select>
 

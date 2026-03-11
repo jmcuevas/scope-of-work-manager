@@ -2,7 +2,11 @@
 <div id="item-{{ item.pk }}"
      class="flex items-start justify-between py-2.5 group hover:bg-gray-50 transition-colors"
      style="padding-left: {{ item.level|add:1 }}rem; padding-right: 1rem;">
-  <p class="text-sm text-gray-700 flex-1 leading-relaxed">
+  <p class="text-sm text-gray-700 flex-1 leading-relaxed cursor-pointer hover:text-primary-700 transition-colors"
+     hx-get="{% url 'exhibits:item_edit' exhibit.pk section.pk item.pk %}"
+     hx-target="#item-{{ item.pk }}"
+     hx-swap="outerHTML"
+     title="Click to edit">
     {% with number=numbers|get_item:item.pk %}
       {% if number %}
         <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ number }}</span>
@@ -39,18 +43,15 @@
             class="text-xs text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded transition-colors">
       ←
     </button>
-    <button hx-get="{% url 'exhibits:item_edit' exhibit.pk section.pk item.pk %}"
-            hx-target="#item-{{ item.pk }}"
-            hx-swap="outerHTML"
-            class="text-xs text-gray-400 hover:text-primary-600 px-1.5 py-0.5 rounded transition-colors">
-      Edit
-    </button>
     <button hx-post="{% url 'exhibits:item_delete' exhibit.pk section.pk item.pk %}"
             hx-target="#items-{{ section.pk }}"
             hx-swap="innerHTML"
             hx-confirm="Delete this item and any sub-items?"
-            class="text-xs text-gray-400 hover:text-red-500 px-1.5 py-0.5 rounded transition-colors">
-      Delete
+            title="Delete"
+            class="text-gray-400 hover:text-red-500 px-1 py-0.5 rounded transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+      </svg>
     </button>
   </div>
 </div>
