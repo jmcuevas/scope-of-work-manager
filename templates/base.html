@@ -70,7 +70,7 @@
   <!-- ═══════════════════════════════════════════════
        BELOW NAVBAR: sidebar + content
   ══════════════════════════════════════════════════ -->
-  <div class="flex pt-14 min-h-screen">
+  <div class="flex h-screen overflow-hidden pt-14">
 
     <!-- LEFT SIDEBAR -->
     <aside class="fixed left-0 top-14 bottom-0 w-60 bg-white border-r border-gray-200 overflow-y-auto z-40">
@@ -80,10 +80,10 @@
     </aside>
 
     <!-- MAIN AREA (offset by sidebar width) -->
-    <div class="ml-60 flex flex-1">
+    <div class="ml-60 flex flex-1 overflow-hidden">
 
       <!-- CENTER: main content -->
-      <main class="flex-1 p-6 min-w-0">
+      <main class="flex-1 p-6 min-w-0 overflow-y-auto">
 
         <!-- Flash messages -->
         {% if messages %}

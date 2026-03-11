@@ -13,16 +13,7 @@
               required
               class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none">{{ note.text }}</textarea>
 
-    <!-- Type -->
-    <select name="note_type"
-            required
-            class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
-      {% for value, label in form.fields.note_type.choices %}
-        {% if value %}
-          <option value="{{ value }}" {% if note.note_type == value %}selected{% endif %}>{{ label }}</option>
-        {% endif %}
-      {% endfor %}
-    </select>
+    <input type="hidden" name="note_type" value="{{ note.note_type }}">
 
     <!-- Primary trade -->
     <select name="primary_trade"

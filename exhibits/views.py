@@ -125,14 +125,15 @@ def exhibit_editor(request, pk):
     # Notes sidebar context
     notes = Note.objects.none()
     note_form = None
+    current_trade = None
     if exhibit.project:
         try:
-            trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+            current_trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
             from django.db.models import Q
             notes = (
                 Note.objects
                 .filter(project=exhibit.project)
-                .filter(Q(primary_trade=trade) | Q(related_trades=trade))
+                .filter(Q(primary_trade=current_trade) | Q(related_trades=current_trade))
                 .select_related('primary_trade__csi_trade', 'created_by', 'resolved_by')
                 .prefetch_related('related_trades__csi_trade')
                 .distinct()
@@ -155,6 +156,7 @@ def exhibit_editor(request, pk):
         'items_by_section': items_by_section,
         'notes': notes,
         'form': note_form,
+        'current_trade': current_trade,
         'ai_enabled': settings.AI_ENABLED,
         'latest_review': latest_review,
     })
