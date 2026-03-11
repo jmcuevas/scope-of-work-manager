@@ -40,6 +40,13 @@ class Note(models.Model):
         on_delete=models.PROTECT,
         related_name='created_notes',
     )
+    scope_item = models.ForeignKey(
+        'exhibits.ScopeItem',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notes',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -1,10 +1,18 @@
-<form hx-post="{% url 'notes:note_add' exhibit.pk %}"
+<form id="note-add-form"
+      hx-post="{% url 'notes:note_add' exhibit.pk %}"
       hx-target="#notes-list"
       hx-swap="outerHTML"
-      hx-on:htmx:after-request="this.reset()"
+      hx-on:htmx:after-request="resetNoteForm()"
       class="space-y-2 mb-4 pb-4 border-b border-gray-100">
 
   <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Add Note</p>
+
+  <!-- Scope item context (shown when linked from an item) -->
+  <div id="note-item-context" class="hidden items-center justify-between gap-2 bg-primary-50 border border-primary-100 rounded px-2 py-1.5">
+    <span class="text-xs text-primary-700 font-medium" id="note-item-label"></span>
+    <button type="button" onclick="clearNoteItemLink()" class="text-primary-400 hover:text-primary-600 text-xs leading-none">✕</button>
+  </div>
+  <input type="hidden" name="scope_item_id" id="note-scope-item-id">
 
   <!-- Text -->
   <textarea name="text"

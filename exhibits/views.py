@@ -159,12 +159,26 @@ def exhibit_editor(request, pk):
         'current_trade': current_trade,
         'ai_enabled': settings.AI_ENABLED,
         'latest_review': latest_review,
+        'item_note_counts': _item_note_counts(exhibit),
     })
 
 
 # ---------------------------------------------------------------------------
 # Section CRUD (HTMX — all return section_list partial)
 # ---------------------------------------------------------------------------
+
+def _item_note_counts(exhibit):
+    """Return {item_pk: count} for all notes linked to items in this exhibit."""
+    from notes.models import Note
+    from django.db.models import Count
+    rows = (
+        Note.objects
+        .filter(scope_item__section__scope_exhibit=exhibit)
+        .values('scope_item_id')
+        .annotate(count=Count('id'))
+    )
+    return {row['scope_item_id']: row['count'] for row in rows}
+
 
 def _section_list_response(request, exhibit):
     sections = list(exhibit.sections.order_by('order'))
@@ -179,6 +193,7 @@ def _section_list_response(request, exhibit):
         'numbers': numbers,
         'items_by_section': items_by_section,
         'ai_enabled': settings.AI_ENABLED,
+        'item_note_counts': _item_note_counts(exhibit),
     })
 
 
@@ -251,6 +266,7 @@ def _item_list_response(request, exhibit, section):
         'section': section,
         'items': items,
         'numbers': numbers,
+        'item_note_counts': _item_note_counts(exhibit),
     })
 
 

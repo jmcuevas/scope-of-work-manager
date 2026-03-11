@@ -193,6 +193,39 @@
 
 {% block extra_js %}{{ block.super }}
 <script>
+  function linkNoteToItem(itemPk, sectionName, itemNumber) {
+    switchTab('notes');
+    document.getElementById('note-scope-item-id').value = itemPk;
+    var label = sectionName + (itemNumber ? ' — ' + itemNumber : '');
+    document.getElementById('note-item-label').textContent = label;
+    var ctx = document.getElementById('note-item-context');
+    ctx.classList.remove('hidden');
+    ctx.classList.add('flex');
+    document.getElementById('panel-notes').scrollTop = 0;
+    document.querySelector('#note-add-form textarea[name="text"]').focus();
+  }
+
+  function clearNoteItemLink() {
+    document.getElementById('note-scope-item-id').value = '';
+    var ctx = document.getElementById('note-item-context');
+    ctx.classList.add('hidden');
+    ctx.classList.remove('flex');
+  }
+
+  function resetNoteForm() {
+    document.getElementById('note-add-form').reset();
+    clearNoteItemLink();
+  }
+
+  function highlightItem(itemPk) {
+    var el = document.getElementById('item-' + itemPk);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.transition = 'background-color 0.2s';
+    el.style.backgroundColor = '#fef9c3';
+    setTimeout(function() { el.style.backgroundColor = ''; }, 2000);
+  }
+
   function switchTab(tab) {
     var tabs = ['notes', 'review'];
     tabs.forEach(function(t) {
