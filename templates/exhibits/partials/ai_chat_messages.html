@@ -1,0 +1,19 @@
+{% load exhibit_tags %}
+<!-- User message -->
+<div class="flex justify-end">
+  <div class="max-w-[80%] bg-primary-600 text-white rounded-2xl rounded-br-sm px-4 py-3">
+    <p class="text-sm leading-relaxed whitespace-pre-wrap">{{ user_message }}</p>
+  </div>
+</div>
+
+<!-- Assistant message -->
+<div class="flex justify-start" data-history="{{ history_json|escapejs }}">
+  <div class="max-w-[80%] {% if error %}bg-red-50 border border-red-200{% else %}bg-gray-100{% endif %} text-gray-800 rounded-2xl rounded-bl-sm px-4 py-3">
+    <p class="text-sm leading-relaxed whitespace-pre-wrap">{{ assistant_message }}</p>
+    {% if changes_applied %}
+    <p class="text-xs text-primary-600 font-medium mt-2">
+      ✓ {{ changes_applied }} change{{ changes_applied|pluralize }} added as pending items — review in the editor.
+    </p>
+    {% endif %}
+  </div>
+</div>

@@ -621,14 +621,22 @@ ScopeItem
 ├── section (FK → ExhibitSection) — which section this item belongs to
 ├── parent (FK → ScopeItem, nullable) — null = top-level item
 ├── level: int (default 0) — nesting depth (0 = top-level, 1 = sub-item, 2 = sub-sub-item)
-├── text: text — the exhibit language
+├── text: text — the exhibit language (may be AI-proposed text when is_pending_review=True)
 ├── original_input: text (nullable) — what PM typed if AI-generated
 ├── is_ai_generated: boolean
+├── is_pending_review: boolean (default False) — True when item has an unreviewed AI suggestion
+├── pending_original_text: text (blank=True) — stores the original text when AI proposes an edit;
+│                                               empty string when AI proposed a new item (no original)
 ├── order: int — display order within siblings at same level
 ├── created_by (FK → User)
 ├── created_at
 └── updated_at
 ```
+
+**Pending review semantics**:
+- `is_pending_review=True` + `pending_original_text` is non-empty → AI proposed editing an existing item. `text` holds the proposed new text; `pending_original_text` holds the original text so the user can see a diff and reject back to original.
+- `is_pending_review=True` + `pending_original_text` is empty → AI proposed a brand-new item. Rejecting deletes the item entirely.
+- `is_pending_review=False` → item is live/accepted. Normal state for all manually created or accepted items.
 
 **Creating from a template or past exhibit**: PM selects a starting point (either a template or a finalized past exhibit). The system clones the entire ScopeExhibit — copies the ExhibitSections and all ScopeItems into a new exhibit linked to the project. Sets `based_on` to the source. From that point, it's a fully independent document.
 
@@ -644,6 +652,7 @@ ScopeItem
 Note
 ├── id
 ├── project (FK → Project)
+├── scope_item (FK → ScopeItem, nullable) — when note is linked to a specific scope item (Google Sheets-style comment)
 ├── primary_trade (FK → Trade)
 ├── related_trades (M2M → Trade)
 ├── text: text
@@ -657,6 +666,8 @@ Note
 ├── created_at
 └── updated_at
 ```
+
+**Scope item comments**: When a PM clicks the comment icon on a scope item, the note form pre-links to that item (stored as `scope_item` FK). The note card then renders a reference chip showing the section name and item number, with a "highlight item" button that scrolls to and briefly highlights the item in the editor. Items with linked notes show a comment badge with count. `scope_item` is nullable — notes without a linked item (general trade notes) work exactly as before.
 
 #### Review / Checklist Models
 
@@ -706,19 +717,17 @@ The data model supports these critical views:
 
 ### AI Service Layer
 
-The AI integration is isolated in a service module (`services/ai.py`) with two functions:
+The AI integration is isolated in a service module (`ai_services/services.py`) with the following functions:
 
 ```python
-# Function 1: Scope description → exhibit language
-def generate_scope_from_description(
-    trade_name: str,           # from csi_trade.name
-    csi_code: str,             # from csi_trade.csi_code
-    project_type: str,         # from project.project_type.name
-    project_description: str,  # from project.description
-    scope_description: str,    # from scope_exhibit.scope_description
-    existing_sections: list[dict],  # current sections and their items for context
-) -> dict:
+# Function 1: Scope description → exhibit language (bulk generation)
+def generate_scope_from_description(exhibit) -> dict:
     """
+    Builds user prompt from exhibit.csi_trade, project type, project description,
+    exhibit.scope_description, and existing sections/items for context.
+    Asks Claude to check if the exhibit already covers the scope description before
+    generating more — prevents duplicate/redundant items.
+
     Returns:
     {
         "scope_items": [              # Suggested ScopeItems organized by section
@@ -732,31 +741,107 @@ def generate_scope_from_description(
             ...
         ],
     }
+    Items are created with is_ai_generated=True and is_pending_review=True so the PM
+    can review and accept/reject each one before they become part of the exhibit.
     """
 
-# Function 2: Natural language → scope item
-def generate_scope_item(
-    input_text: str,
-    trade_name: str,
-    section_name: str,               # which section the item is being added to
-    existing_scope_context: str,      # current exhibit content for context
-) -> dict:
+# Function 2: Natural language → scope item (per-section, single item)
+def generate_scope_item(input_text: str, exhibit, section) -> str:
     """
-    Returns:
-    {
-        "exhibit_text": "...",        # Standardized exhibit language
-    }
+    Sends the PM's plain-language note plus trade/section context.
+    Asks Claude to rewrite as a single polished exhibit line.
+    Returns the standardized text string.
+    Item created with is_ai_generated=True and is_pending_review=True.
+    """
+
+# Function 3: Rewrite an existing scope item
+def rewrite_scope_item(item, exhibit, instruction: str = '') -> str:
+    """
+    Takes an existing ScopeItem and an optional instruction (e.g., "make more specific",
+    "add reference to drawing"). Returns proposed new text.
+    Caller sets item.is_pending_review=True, item.pending_original_text=item.text,
+    item.text=proposed_text.
+    """
+
+# Function 4: Expand a scope item into sub-items
+def expand_scope_item(item, exhibit) -> list[dict]:
+    """
+    Takes a top-level or parent scope item and returns a list of suggested child items:
+    [{"text": "...", "level": item.level + 1}, ...]
+    Sub-items created with is_ai_generated=True and is_pending_review=True.
+    """
+
+# Function 5: Exhibit-level conversational AI
+def chat_with_exhibit(exhibit, conversation_history: list[dict]) -> dict:
+    """
+    Takes the full conversation history (list of {role, content} dicts) and the
+    current exhibit state. Returns a response that may include:
+    - conversational text (assistant message to display)
+    - proposed_changes: list of item-level changes to queue as pending review
+      Each change: {action: "add"|"edit"|"delete", section_name, item_text, level,
+                    target_item_pk (for edit/delete)}
+
+    Proposed changes are applied with is_pending_review=True so the PM can
+    accept/reject them after the chat session ends.
     """
 ```
+
+**Pending review workflow** (applies to all AI-generated suggestions):
+1. AI functions create or modify `ScopeItem` records with `is_pending_review=True`
+2. The editor shows a **pending banner** when any items have `is_pending_review=True`, displaying the count and bulk "Accept All" / "Reject All" buttons
+3. Each pending item renders with a **side-by-side diff**: original text crossed out in red, proposed text highlighted in green
+4. Per-item **Accept ✓** and **Reject ✗** buttons:
+   - Accept → clears `is_pending_review`, keeps `text` as-is, clears `pending_original_text`
+   - Reject → if `pending_original_text` is non-empty: restore original `text`, clear pending state; if empty (new item): delete the item
+5. PM can also edit the proposed text directly before accepting (edit-then-accept)
 
 **System prompt strategy**: Each function uses a system prompt that includes:
 - Trade-specific terminology and conventions
 - Standard exhibit formatting rules (capitalize trade names, reference drawings as "per Drawing X.X", use "provide and install" not "supply")
 - Legal/contractual tone guidelines
-- Examples from the company's existing templates (seeded initially, grows over time)
-- The current exhibit context (what's already in the scope) to avoid duplication
+- The current exhibit content to avoid duplication and enable completeness checks
 
-**API choice**: Claude API (Sonnet for speed/cost — these are structured text generation tasks, not complex reasoning). Falls back gracefully if API is unavailable — PM can always type exhibit language manually.
+**API choice**: Claude API (Sonnet for speed/cost — structured text generation). Falls back gracefully if API is unavailable — PM can always type exhibit language manually.
+
+### AI Assistant UX
+
+The AI is surfaced through three entry points in the scope editor, all using the ✨ icon:
+
+#### 1. Scope Description AI (existing — bulk generation)
+- ✨ button in the scope description card (editor header area)
+- Triggers `generate_scope_from_description()` — generates sections + items from the description
+- All generated items created as `is_pending_review=True` for batch review
+- Completeness check first: if exhibit already has substantial content matching the description, AI acknowledges it rather than generating duplicates
+
+#### 2. Right Pane AI Tab (new — contextual quick actions)
+- Third tab in the editor right panel alongside "Notes" and "Final Review"
+- Content is context-sensitive based on what's selected/focused in the editor:
+  - **No selection**: "Generate more items for [section]" per-section actions; "Check exhibit completeness" button
+  - **Item selected/focused**: "Rewrite this item" (with optional instruction field), "Expand into sub-items"
+  - **Note linked**: "Convert this note to a scope item" (uses note text as input to `generate_scope_item`)
+- Results preview inline in the AI tab before being queued as pending
+- HTMX pattern: `hx-post` → server calls Claude → returns pending item(s) inserted into editor + AI tab updated
+
+#### 3. Full-Screen Chat Overlay (new — exhibit-level conversation)
+- "Chat with AI ✨" button in the editor header
+- Opens a full-screen overlay with a conversational interface (message history + input)
+- PM can have a multi-turn conversation: "Add a section about coordination with the electrical contractor", "The project has a raised floor — update the scope to reflect that"
+- Each AI response may propose changes (new items, edits, deletions) queued as pending
+- PM exits the overlay by closing it; pending changes remain in the editor for review
+- Chat history is session-only (not persisted to DB)
+- HTMX pattern: `hx-post` with conversation history in body → server calls Claude → returns assistant message + applies pending changes → returns updated overlay + pending banner
+
+#### Pending Banner
+- Shown in the editor header when `exhibit.sections.items.filter(is_pending_review=True).exists()`
+- Displays: "N AI suggestion(s) pending review" with "Accept All" and "Reject All" buttons
+- Updated via HTMX `HX-Trigger: pendingChanged` header after any accept/reject action
+
+#### Pending Item Display
+Each item with `is_pending_review=True` renders differently in `item.html`:
+- If `pending_original_text` is non-empty (edit): strikethrough original in red, new text in green below
+- If `pending_original_text` is empty (new item): new text highlighted in amber/yellow background
+- Accept ✓ button: `hx-post` → `item_accept_ai` view → returns normal item partial
+- Reject ✗ button: `hx-post` → `item_reject_ai` view → returns normal item (restored) or empty (deleted)
 
 ### PDF Export
 
@@ -802,8 +887,16 @@ The UI is server-rendered HTML with HTMX for dynamic behavior — no JavaScript 
 | Reorder scope item (up/down) | `hx-post` → swaps `order` with neighbor item → returns re-rendered item list. **Subtree moves as a unit**: moving a parent item moves all its children with it. |
 | Indent/outdent scope item | `hx-post` → updates `parent` and `level` → returns re-rendered item with updated numbering. **Cascades to children**: indenting/outdenting a parent shifts all descendants by the same amount. |
 | Add note from sidebar | `hx-post` → creates Note → returns updated notes list partial |
-| AI: generate scope from description | `hx-post` → calls Claude API → returns generated items directly inserted into relevant exhibit sections (with loading indicator). PM edits in place after insertion. |
-| AI: generate inclusion/exclusion | `hx-post` → calls Claude API → returns preview partial for accept/edit/reject |
+| Add note linked to scope item | click comment icon → JS sets hidden `scope_item_id` field → same `hx-post` → note saved with scope_item FK → returns updated notes list |
+| AI: generate scope from description | `hx-post` → calls Claude API → creates items with `is_pending_review=True` → returns section list + pending banner (with loading indicator) |
+| AI: per-section item generation | `hx-post` → calls Claude API → creates item with `is_pending_review=True` → returns section item list + pending banner |
+| AI: rewrite item | `hx-post` → calls Claude API → sets `is_pending_review=True`, `pending_original_text`, updates `text` → returns updated item partial (diff view) + pending banner |
+| AI: expand item into sub-items | `hx-post` → calls Claude API → creates child items with `is_pending_review=True` → returns section item list + pending banner |
+| AI: chat overlay | `hx-post` with conversation history → calls Claude API → applies proposed changes as pending → returns chat response + section list + pending banner |
+| AI: accept pending item | `hx-post` → clears pending fields → returns normal item partial; fires `HX-Trigger: pendingChanged` |
+| AI: reject pending item | `hx-post` → restores original or deletes item → returns item partial or empty; fires `HX-Trigger: pendingChanged` |
+| AI: accept all pending | `hx-post` → bulk clears pending on all items in exhibit → returns section list + clears banner |
+| AI: reject all pending | `hx-post` → bulk restores/deletes all pending items → returns section list + clears banner |
 | Change trade status | `hx-patch` → updates Trade.status → returns updated dashboard row |
 | Final review initiation | `hx-post` → runs checks → returns review checklist partial |
 | Resolve note | `hx-patch` → updates Note status/resolution → returns updated note card |

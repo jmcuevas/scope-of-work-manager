@@ -1,0 +1,184 @@
+{% load exhibit_tags %}
+{% if selected_item %}
+<!-- ── Item context state ──────────────────────────────────────────────── -->
+<div class="space-y-4">
+  <div>
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Selected Item</p>
+    <p class="text-sm text-gray-600 italic leading-relaxed">"{{ selected_item.text|truncatechars:120 }}"</p>
+    <p class="text-xs text-gray-400 mt-1">{{ selected_item.section.name }}</p>
+  </div>
+
+  <!-- Rewrite -->
+  <div>
+    <p class="text-xs font-medium text-gray-600 mb-1.5">Rewrite item</p>
+    <form hx-post="{% url 'exhibits:item_rewrite' exhibit.pk selected_item.section.pk selected_item.pk %}"
+          hx-target="#item-{{ selected_item.pk }}"
+          hx-swap="outerHTML"
+          hx-indicator="#ai-panel-spinner"
+          hx-on:htmx:after-request="htmx.ajax('GET', '{% url 'exhibits:ai_panel' exhibit.pk %}', {target: '#panel-ai', swap: 'innerHTML'})">
+      {% csrf_token %}
+      <input type="text" name="instruction"
+             placeholder="Optional instruction (e.g. 'add seismic bracing')"
+             class="w-full text-xs text-gray-700 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-400 mb-2">
+      <button type="submit"
+              class="w-full flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors">
+        <span id="ai-panel-spinner" class="htmx-indicator">⏳</span>
+        ✨ Rewrite
+      </button>
+    </form>
+  </div>
+
+  <!-- Expand -->
+  <div class="border-t border-gray-100 pt-3">
+    <button hx-post="{% url 'exhibits:item_expand' exhibit.pk selected_item.section.pk selected_item.pk %}"
+            hx-target="#items-{{ selected_item.section.pk }}"
+            hx-swap="innerHTML"
+            hx-indicator="#ai-panel-spinner"
+            hx-on:htmx:after-request="htmx.ajax('GET', '{% url 'exhibits:ai_panel' exhibit.pk %}', {target: '#panel-ai', swap: 'innerHTML'})"
+            class="w-full px-2 py-1.5 text-xs font-medium text-gray-600 hover:text-primary-700 hover:bg-primary-50 border border-gray-200 rounded transition-colors text-left">
+      {% csrf_token %}
+      ✨ Expand into sub-items
+    </button>
+  </div>
+
+  <!-- Back -->
+  <div class="border-t border-gray-100 pt-3">
+    <button hx-get="{% url 'exhibits:ai_panel' exhibit.pk %}"
+            hx-target="#panel-ai"
+            hx-swap="innerHTML"
+            class="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+      ← Back to AI panel
+    </button>
+  </div>
+</div>
+
+{% elif suggestions is not None %}
+<!-- ── Completeness check results ──────────────────────────────────────── -->
+<div class="space-y-3">
+  <div class="flex items-center justify-between">
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Completeness Check</p>
+    <button hx-get="{% url 'exhibits:ai_panel' exhibit.pk %}"
+            hx-target="#panel-ai"
+            hx-swap="innerHTML"
+            class="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+      ← Back
+    </button>
+  </div>
+
+  {% if error %}
+  <p class="text-xs text-red-500 italic">{{ error }}</p>
+
+  {% elif not suggestions %}
+  <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+    <p class="text-sm font-medium text-green-700">✓ Scope looks complete</p>
+    <p class="text-xs text-green-600 mt-0.5">No significant gaps were identified.</p>
+  </div>
+
+  {% else %}
+  <p class="text-xs text-gray-500">Found {{ suggestions|length }} potential gap{{ suggestions|length|pluralize }} — click to add as pending items:</p>
+  {% for gap in suggestions %}
+  <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-1.5">
+    <p class="text-xs text-gray-700 leading-relaxed">{{ gap.text }}</p>
+    {% if gap.reason %}
+    <p class="text-xs text-gray-400 italic">{{ gap.reason }}</p>
+    {% endif %}
+    {% if gap.section %}
+    <form hx-post="{% url 'exhibits:add_gap_item' exhibit.pk gap.section.pk %}"
+          hx-target="#items-{{ gap.section.pk }}"
+          hx-swap="innerHTML"
+          hx-on:htmx:after-request="this.closest('.space-y-3').querySelector('[hx-get]').click()">
+      {% csrf_token %}
+      <input type="hidden" name="text" value="{{ gap.text }}">
+      <button type="submit"
+              class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors">
+        + Add to {{ gap.section.name }}
+      </button>
+    </form>
+    {% else %}
+    <p class="text-xs text-gray-400 italic">Section "{{ gap.section_name }}" not found in exhibit.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+{% else %}
+<!-- ── Default state ───────────────────────────────────────────────────── -->
+<div class="space-y-5">
+
+  <!-- Completeness check -->
+  <div>
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Exhibit Analysis</p>
+    {% if exhibit.scope_description %}
+    <form hx-post="{% url 'exhibits:check_completeness' exhibit.pk %}"
+          hx-target="#panel-ai"
+          hx-swap="innerHTML"
+          hx-indicator="#completeness-spinner">
+      {% csrf_token %}
+      <button type="submit"
+              class="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 rounded-md transition-colors">
+        <span id="completeness-spinner" class="htmx-indicator">⏳</span>
+        ✨ Check Exhibit Completeness
+      </button>
+    </form>
+    <p class="text-xs text-gray-400 mt-1.5">Identifies scope items that may be missing for this trade.</p>
+    {% else %}
+    <p class="text-xs text-gray-400 italic">Save a scope description to enable completeness check.</p>
+    {% endif %}
+  </div>
+
+  {% if open_notes %}
+  <!-- Open questions → scope items -->
+  <div class="border-t border-gray-100 pt-4">
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+      Open Questions
+      <span class="ml-1 text-xs font-normal text-gray-400">({{ open_notes|length }})</span>
+    </p>
+    <p class="text-xs text-gray-400 mb-3">Convert open questions into pending scope items.</p>
+    <div class="space-y-3">
+      {% for note in open_notes %}
+      <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2">
+        <p class="text-xs text-gray-700 leading-relaxed">{{ note.text|truncatechars:120 }}</p>
+        <form hx-post="{% url 'exhibits:note_to_scope_item' exhibit.pk note.pk %}"
+              hx-target="#section-list"
+              hx-swap="innerHTML"
+              hx-indicator="#note-spinner-{{ note.pk }}">
+          {% csrf_token %}
+          <div class="flex items-center gap-2">
+            <select name="section_pk"
+                    class="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary-400 bg-white">
+              {% for section in sections %}
+              <option value="{{ section.pk }}">{{ section.name }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit"
+                    class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 rounded transition-colors shrink-0">
+              <span id="note-spinner-{{ note.pk }}" class="htmx-indicator">⏳</span>
+              Convert ✨
+            </button>
+          </div>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Per-section quick links -->
+  {% if sections %}
+  <div class="border-t border-gray-100 pt-4">
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sections</p>
+    <p class="text-xs text-gray-400 mb-2">Jump to a section to use the "Ask AI…" input there.</p>
+    <div class="space-y-1">
+      {% for section in sections %}
+      <button onclick="document.getElementById('section-ai-input-{{ section.pk }}')?.scrollIntoView({behavior:'smooth',block:'center'}); document.getElementById('section-ai-input-{{ section.pk }}')?.focus();"
+              class="w-full text-left px-2 py-1.5 text-xs text-gray-600 hover:text-primary-700 hover:bg-primary-50 rounded transition-colors">
+        {{ section.name }}
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endif %}

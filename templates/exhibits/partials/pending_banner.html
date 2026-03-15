@@ -1,0 +1,21 @@
+{% if pending_count %}
+<div class="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+  <p class="text-sm text-amber-800 font-medium">
+    ✨ {{ pending_count }} AI suggestion{{ pending_count|pluralize }} pending review
+  </p>
+  <div class="flex items-center gap-2">
+    <button hx-post="{% url 'exhibits:accept_all_pending' exhibit.pk %}"
+            hx-target="#section-list"
+            hx-swap="innerHTML"
+            class="px-3 py-1 text-xs font-medium text-green-700 bg-white border border-green-300 hover:bg-green-50 rounded-md transition-colors">
+      Accept All
+    </button>
+    <button hx-post="{% url 'exhibits:reject_all_pending' exhibit.pk %}"
+            hx-target="#section-list"
+            hx-swap="innerHTML"
+            class="px-3 py-1 text-xs font-medium text-red-600 bg-white border border-red-300 hover:bg-red-50 rounded-md transition-colors">
+      Reject All
+    </button>
+  </div>
+</div>
+{% endif %}

@@ -16,8 +16,12 @@ from .services import (
     AIServiceError,
     _call_claude,
     _parse_json_response,
+    chat_with_exhibit,
+    check_exhibit_completeness,
+    expand_scope_item,
     generate_scope_from_description,
     generate_scope_item,
+    rewrite_scope_item,
 )
 
 
@@ -285,9 +289,11 @@ class TestExhibitGenerateScopeView:
             response = client.post(url)
 
         assert response.status_code == 200
+        assert response['HX-Trigger'] == 'pendingChanged'
         item = ScopeItem.objects.get(section=section)
         assert item.text == 'Provide and install ductwork.'
         assert item.is_ai_generated is True
+        assert item.is_pending_review is True
 
     def test_skips_unmatched_section_names(self, client):
         user = PMUserFactory()
@@ -338,9 +344,11 @@ class TestItemGenerateView:
             response = client.post(url, {'text': 'include hangers'})
 
         assert response.status_code == 200
+        assert response['HX-Trigger'] == 'pendingChanged'
         item = ScopeItem.objects.get(section=section)
         assert item.text == 'Provide and install all hangers.'
         assert item.is_ai_generated is True
+        assert item.is_pending_review is True
 
     def test_falls_back_to_raw_input_on_ai_failure(self, client):
         user = PMUserFactory()
@@ -354,9 +362,11 @@ class TestItemGenerateView:
             response = client.post(url, {'text': 'include hangers'})
 
         assert response.status_code == 200
+        assert 'HX-Trigger' not in response
         item = ScopeItem.objects.get(section=section)
         assert item.text == 'include hangers'
         assert item.is_ai_generated is False
+        assert item.is_pending_review is False
 
     def test_empty_input_returns_item_list_unchanged(self, client):
         user = PMUserFactory()
@@ -378,3 +388,306 @@ class TestItemGenerateView:
         url = reverse('exhibits:item_generate', kwargs={'pk': other_exhibit.pk, 'section_pk': section.pk})
         response = client.post(url, {'text': 'some text'})
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# rewrite_scope_item
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestRewriteScopeItem:
+
+    def test_returns_proposed_text_on_success(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, text='install ducts', created_by=user)
+
+        payload = json.dumps({'exhibit_text': 'Provide and install all ductwork per Contract Documents.'})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = rewrite_scope_item(item, exhibit)
+
+        assert result == 'Provide and install all ductwork per Contract Documents.'
+
+    def test_includes_instruction_in_call(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, text='install ducts', created_by=user)
+
+        payload = json.dumps({'exhibit_text': 'Provide and install all ductwork including seismic bracing.'})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = rewrite_scope_item(item, exhibit, instruction='add seismic bracing reference')
+
+        # Verify the instruction was sent in the user message
+        call_args = mock_client.return_value.messages.create.call_args
+        messages = call_args.kwargs['messages']
+        assert 'add seismic bracing reference' in messages[0]['content']
+        assert result == 'Provide and install all ductwork including seismic bracing.'
+
+    def test_returns_none_on_malformed_json(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, text='install ducts', created_by=user)
+
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response('not json')
+            result = rewrite_scope_item(item, exhibit)
+
+        assert result is None
+
+    def test_raises_ai_disabled_error(self, settings):
+        settings.AI_ENABLED = False
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, created_by=user)
+        with pytest.raises(AIDisabledError):
+            rewrite_scope_item(item, exhibit)
+
+    def test_logs_request_type(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, text='install ducts', created_by=user)
+
+        payload = json.dumps({'exhibit_text': 'Provide and install ductwork.'})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            rewrite_scope_item(item, exhibit)
+
+        log = AIRequestLog.objects.latest('created_at')
+        assert log.request_type == AIRequestLog.RequestType.REWRITE_ITEM
+        assert log.success is True
+
+
+# ---------------------------------------------------------------------------
+# expand_scope_item
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestExpandScopeItem:
+
+    def test_returns_child_items_on_success(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, level=0, text='Provide ductwork.', created_by=user)
+
+        payload = json.dumps({'items': [
+            {'text': 'Include all hangers and supports.', 'level': 1},
+            {'text': 'Include all flexible connections.', 'level': 1},
+        ]})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = expand_scope_item(item, exhibit)
+
+        assert len(result) == 2
+        assert result[0] == {'text': 'Include all hangers and supports.', 'level': 1}
+        assert result[1] == {'text': 'Include all flexible connections.', 'level': 1}
+
+    def test_child_level_is_parent_level_plus_one(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        # Parent at level 1 — children should be level 2
+        item = ScopeItemFactory(section=section, level=1, text='Include hangers.', created_by=user)
+
+        payload = json.dumps({'items': [
+            {'text': 'Rod hangers at 8ft spacing.', 'level': 2},
+        ]})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = expand_scope_item(item, exhibit)
+
+        assert result[0]['level'] == 2
+
+    def test_returns_none_on_malformed_json(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, created_by=user)
+
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response('bad json')
+            result = expand_scope_item(item, exhibit)
+
+        assert result is None
+
+    def test_raises_ai_disabled_error(self, settings):
+        settings.AI_ENABLED = False
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, created_by=user)
+        with pytest.raises(AIDisabledError):
+            expand_scope_item(item, exhibit)
+
+    def test_logs_request_type(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(section=section, level=0, text='Provide ductwork.', created_by=user)
+
+        payload = json.dumps({'items': [{'text': 'Include hangers.', 'level': 1}]})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            expand_scope_item(item, exhibit)
+
+        log = AIRequestLog.objects.latest('created_at')
+        assert log.request_type == AIRequestLog.RequestType.EXPAND_ITEM
+        assert log.success is True
+
+
+# ---------------------------------------------------------------------------
+# chat_with_exhibit
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestChatWithExhibit:
+
+    def test_returns_message_and_empty_changes(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        payload = json.dumps({
+            'message': 'Looks good! The scope covers the main items.',
+            'proposed_changes': [],
+        })
+        history = [{'role': 'user', 'content': 'Does the scope look complete?'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = chat_with_exhibit(exhibit, history)
+
+        assert result['message'] == 'Looks good! The scope covers the main items.'
+        assert result['proposed_changes'] == []
+
+    def test_returns_proposed_changes(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        payload = json.dumps({
+            'message': "I've suggested one addition.",
+            'proposed_changes': [
+                {'action': 'add', 'section_name': 'Scope of Work',
+                 'text': 'Coordinate with Electrical Contractor.', 'level': 0},
+            ],
+        })
+        history = [{'role': 'user', 'content': 'Add a coordination item.'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = chat_with_exhibit(exhibit, history)
+
+        assert len(result['proposed_changes']) == 1
+        assert result['proposed_changes'][0]['action'] == 'add'
+
+    def test_passes_full_conversation_history_to_api(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        payload = json.dumps({'message': 'Sure.', 'proposed_changes': []})
+        history = [
+            {'role': 'user', 'content': 'First message'},
+            {'role': 'assistant', 'content': 'First reply'},
+            {'role': 'user', 'content': 'Second message'},
+        ]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            chat_with_exhibit(exhibit, history)
+
+        call_args = mock_client.return_value.messages.create.call_args
+        assert call_args.kwargs['messages'] == history
+
+    def test_returns_none_on_malformed_json(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response('bad json')
+            result = chat_with_exhibit(exhibit, history)
+
+        assert result is None
+
+    def test_raises_ai_disabled_error(self, settings):
+        settings.AI_ENABLED = False
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        with pytest.raises(AIDisabledError):
+            chat_with_exhibit(exhibit, [{'role': 'user', 'content': 'Hello'}])
+
+    def test_logs_request_type(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        payload = json.dumps({'message': 'Done.', 'proposed_changes': []})
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            chat_with_exhibit(exhibit, history)
+
+        log = AIRequestLog.objects.latest('created_at')
+        assert log.request_type == AIRequestLog.RequestType.CHAT
+        assert log.success is True
+
+
+# ---------------------------------------------------------------------------
+# check_exhibit_completeness
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCheckExhibitCompleteness:
+
+    def test_returns_gap_list_on_success(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        payload = json.dumps({
+            'gaps': [
+                {'section_name': 'Scope of Work', 'text': 'Provide fire stopping.', 'reason': 'Missing.'},
+            ]
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = check_exhibit_completeness(exhibit)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]['text'] == 'Provide fire stopping.'
+
+    def test_returns_empty_list_when_no_gaps(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        payload = json.dumps({'gaps': []})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            result = check_exhibit_completeness(exhibit)
+        assert result == []
+
+    def test_returns_none_on_malformed_json(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response('not json')
+            result = check_exhibit_completeness(exhibit)
+        assert result is None
+
+    def test_raises_ai_disabled_when_flag_off(self, settings):
+        settings.AI_ENABLED = False
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        with pytest.raises(AIDisabledError):
+            check_exhibit_completeness(exhibit)
+
+    def test_logs_completeness_check_request_type(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        payload = json.dumps({'gaps': []})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            check_exhibit_completeness(exhibit)
+        log = AIRequestLog.objects.latest('created_at')
+        assert log.request_type == AIRequestLog.RequestType.COMPLETENESS_CHECK
+        assert log.success is True

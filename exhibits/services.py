@@ -212,6 +212,68 @@ def create_blank_exhibit(trade, user):
     return exhibit
 
 
+def accept_ai_item(item):
+    """Accept an AI-proposed item: clear pending state, keep text as-is."""
+    item.is_pending_review = False
+    item.pending_original_text = ''
+    item.save(update_fields=['is_pending_review', 'pending_original_text', 'updated_at'])
+
+
+def reject_ai_item(item):
+    """
+    Reject an AI-proposed item.
+    - Edit proposal (pending_original_text non-empty): restore original text.
+    - New item proposal (pending_original_text empty): delete the item and all descendants.
+    """
+    if item.pending_original_text:
+        item.text = item.pending_original_text
+        item.is_pending_review = False
+        item.pending_original_text = ''
+        item.save(update_fields=['text', 'is_pending_review', 'pending_original_text', 'updated_at'])
+    else:
+        descendants = _collect_descendants(item)
+        pks_to_delete = [d.pk for d in descendants] + [item.pk]
+        ScopeItem.objects.filter(pk__in=pks_to_delete).delete()
+
+
+@transaction.atomic
+def accept_all_pending(exhibit):
+    """Accept all pending AI items across the exhibit."""
+    ScopeItem.objects.filter(
+        section__scope_exhibit=exhibit,
+        is_pending_review=True,
+    ).update(is_pending_review=False, pending_original_text='')
+
+
+@transaction.atomic
+def reject_all_pending(exhibit):
+    """
+    Reject all pending AI items across the exhibit.
+    Items with pending_original_text are restored; new items (empty original) are deleted.
+    """
+    pending = list(
+        ScopeItem.objects.filter(section__scope_exhibit=exhibit, is_pending_review=True)
+    )
+
+    to_restore = [i for i in pending if i.pending_original_text]
+    to_delete = [i for i in pending if not i.pending_original_text]
+
+    if to_restore:
+        for item in to_restore:
+            item.text = item.pending_original_text
+            item.is_pending_review = False
+            item.pending_original_text = ''
+        ScopeItem.objects.bulk_update(to_restore, ['text', 'is_pending_review', 'pending_original_text'])
+
+    if to_delete:
+        # Collect all descendants of new items to ensure clean deletion
+        descendant_pks = []
+        for item in to_delete:
+            descendant_pks.extend(d.pk for d in _collect_descendants(item))
+        delete_pks = descendant_pks + [i.pk for i in to_delete]
+        ScopeItem.objects.filter(pk__in=delete_pks).delete()
+
+
 @transaction.atomic
 def clone_exhibit(source_exhibit, trade, user):
     new_exhibit = ScopeExhibit.objects.create(

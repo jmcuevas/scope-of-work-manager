@@ -71,6 +71,12 @@
         Last edited by {{ exhibit.last_edited_by.get_full_name|default:exhibit.last_edited_by.email }}
       </p>
       <div class="flex items-center gap-2">
+        {% if ai_enabled %}
+        <button onclick="openChatOverlay()"
+                class="px-3 py-1.5 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 rounded-md transition-colors">
+          Chat with AI ✨
+        </button>
+        {% endif %}
         <a href="{% url 'exports:exhibit_pdf' exhibit.pk %}"
            class="px-3 py-1.5 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md transition-colors">
           Export PDF
@@ -84,6 +90,14 @@
         </form>
       </div>
     </div>
+  </div>
+
+  <!-- Pending AI review banner -->
+  <div id="pending-banner"
+       hx-get="{% url 'exhibits:pending_banner' exhibit.pk %}"
+       hx-trigger="load, pendingChanged from:body"
+       hx-swap="innerHTML"
+       class="mb-4">
   </div>
 
   <!-- Scope description -->
@@ -151,14 +165,21 @@
   <div class="flex border-b border-gray-200 shrink-0">
     <button id="tab-notes"
             onclick="switchTab('notes')"
-            class="flex-1 px-4 py-3 text-sm font-medium text-primary-700 border-b-2 border-primary-600 bg-white transition-colors">
+            class="flex-1 px-3 py-3 text-sm font-medium text-primary-700 border-b-2 border-primary-600 bg-white transition-colors">
       Notes
     </button>
     <button id="tab-review"
             onclick="switchTab('review')"
-            class="flex-1 px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent bg-white transition-colors">
+            class="flex-1 px-3 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent bg-white transition-colors">
       Final Review
     </button>
+    {% if ai_enabled %}
+    <button id="tab-ai"
+            onclick="switchTab('ai')"
+            class="flex-1 px-3 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent bg-white transition-colors">
+      AI ✨
+    </button>
+    {% endif %}
   </div>
 
   <!-- Notes panel -->
@@ -189,10 +210,21 @@
     {% include "reviews/partials/review_panel.html" with review=latest_review %}
   </div>
 
+  {% if ai_enabled %}
+  <!-- AI assistant panel -->
+  <div id="panel-ai" class="p-5 flex-1 hidden overflow-y-auto">
+    <p class="text-xs text-gray-400 italic">Loading AI panel…</p>
+  </div>
+  {% endif %}
+
 </aside>
 
 {% block extra_js %}{{ block.super }}
 <script>
+  var EXHIBIT_AI_PANEL_URL = "{% url 'exhibits:ai_panel' exhibit.pk %}";
+  var EXHIBIT_AI_CHAT_URL = "{% url 'exhibits:ai_chat' exhibit.pk %}";
+  var EXHIBIT_SECTION_LIST_URL = "{% url 'exhibits:section_list' exhibit.pk %}";
+
   function linkNoteToItem(itemPk, sectionName, itemNumber) {
     switchTab('notes');
     document.getElementById('note-scope-item-id').value = itemPk;
@@ -226,11 +258,34 @@
     setTimeout(function() { el.style.backgroundColor = ''; }, 2000);
   }
 
+  function toggleAIPanel(event, itemPk) {
+    event.stopPropagation();
+    var panel = document.getElementById('ai-panel-' + itemPk);
+    var isHidden = panel.classList.contains('hidden');
+    // Close any other open AI panels
+    document.querySelectorAll('[id^="ai-panel-"]').forEach(function(p) {
+      p.classList.add('hidden');
+    });
+    if (isHidden) {
+      panel.classList.remove('hidden');
+      // Close when clicking outside
+      setTimeout(function() {
+        document.addEventListener('click', function closePanel(e) {
+          if (!panel.contains(e.target)) {
+            panel.classList.add('hidden');
+            document.removeEventListener('click', closePanel);
+          }
+        });
+      }, 0);
+    }
+  }
+
   function switchTab(tab) {
-    var tabs = ['notes', 'review'];
+    var tabs = ['notes', 'review', 'ai'];
     tabs.forEach(function(t) {
       var btn = document.getElementById('tab-' + t);
       var panel = document.getElementById('panel-' + t);
+      if (!btn || !panel) return;
       if (t === tab) {
         btn.classList.add('text-primary-700', 'border-primary-600');
         btn.classList.remove('text-gray-500', 'border-transparent');
@@ -241,6 +296,35 @@
         panel.classList.add('hidden');
       }
     });
+    if (tab === 'ai') {
+      htmx.ajax('GET', EXHIBIT_AI_PANEL_URL, {target: '#panel-ai', swap: 'innerHTML'});
+    }
+  }
+
+  function updateAIPanel(itemPk) {
+    var panel = document.getElementById('panel-ai');
+    if (panel && !panel.classList.contains('hidden')) {
+      htmx.ajax('GET', EXHIBIT_AI_PANEL_URL + '?item_pk=' + itemPk, {
+        target: '#panel-ai',
+        swap: 'innerHTML',
+      });
+    }
+  }
+
+  function openChatOverlay() {
+    var existing = document.getElementById('ai-chat-overlay');
+    if (existing) {
+      existing.classList.remove('hidden');
+      return;
+    }
+    htmx.ajax('GET', EXHIBIT_AI_CHAT_URL, {target: 'body', swap: 'beforeend'});
+  }
+
+  function closeChatOverlay() {
+    var overlay = document.getElementById('ai-chat-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    // Refresh section list to show any pending items created during chat
+    htmx.ajax('GET', EXHIBIT_SECTION_LIST_URL, {target: '#section-list', swap: 'innerHTML'});
   }
 </script>
 {% endblock %}
