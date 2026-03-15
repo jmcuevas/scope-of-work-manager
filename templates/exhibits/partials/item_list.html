@@ -1,5 +1,9 @@
 {% for item in items %}
-  {% include "exhibits/partials/item.html" %}
+  {% if item.pk == edit_item_pk %}
+    {% include "exhibits/partials/item_form.html" %}
+  {% else %}
+    {% include "exhibits/partials/item.html" %}
+  {% endif %}
 {% empty %}
   <p class="px-4 py-3 text-xs text-gray-400 italic">No items yet.</p>
 {% endfor %}

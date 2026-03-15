@@ -1,6 +1,7 @@
 import json as _json
 
 from django.contrib.auth.decorators import login_required
+from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -260,7 +261,7 @@ def section_move(request, pk, section_pk):
 # Item CRUD (HTMX — target is item list within a section)
 # ---------------------------------------------------------------------------
 
-def _item_list_response(request, exhibit, section):
+def _item_list_response(request, exhibit, section, edit_item_pk=None):
     items = flatten_section_items(section)
     numbers = compute_section_numbering(section)
     return render(request, 'exhibits/partials/item_list.html', {
@@ -269,6 +270,7 @@ def _item_list_response(request, exhibit, section):
         'items': items,
         'numbers': numbers,
         'item_note_counts': _item_note_counts(exhibit),
+        'edit_item_pk': edit_item_pk,
     })
 
 
@@ -307,10 +309,13 @@ def item_edit(request, pk, section_pk, item_pk):
     item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
 
     if request.method == 'POST':
+        from django.http import HttpResponse
         text = request.POST.get('text', '').strip()
-        if text:
-            item.text = text
-            item.save(update_fields=['text', 'updated_at'])
+        if not text:
+            item.delete()
+            return HttpResponse('')
+        item.text = text
+        item.save(update_fields=['text', 'updated_at'])
         numbers = compute_section_numbering(section)
         return render(request, 'exhibits/partials/item.html', {
             'exhibit': exhibit,
@@ -319,12 +324,9 @@ def item_edit(request, pk, section_pk, item_pk):
             'numbers': numbers,
         })
 
-    # GET — cancel returns display mode, otherwise edit form
-    template = 'exhibits/partials/item_form.html'
-    if request.GET.get('cancel'):
-        template = 'exhibits/partials/item.html'
+    # GET — show edit form
     numbers = compute_section_numbering(section)
-    return render(request, template, {
+    return render(request, 'exhibits/partials/item_form.html', {
         'exhibit': exhibit,
         'section': section,
         'item': item,
@@ -412,6 +414,35 @@ def item_outdent(request, pk, section_pk, item_pk):
     item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
     outdent_item(item)
     return _item_list_response(request, exhibit, section)
+
+
+@login_required
+@require_POST
+def item_insert_below(request, pk, section_pk, item_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+    item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
+
+    # Save current item text before inserting
+    text = request.POST.get('text', '').strip()
+    if text:
+        item.text = text
+        item.save(update_fields=['text', 'updated_at'])
+
+    # Shift all subsequent items down to make room
+    ScopeItem.objects.filter(section=section, order__gt=item.order).update(order=F('order') + 1)
+
+    # Insert new blank item immediately after, inheriting level and parent
+    new_item = ScopeItem.objects.create(
+        section=section,
+        text='',
+        level=item.level,
+        parent=item.parent,
+        order=item.order + 1,
+        created_by=request.user,
+    )
+
+    return _item_list_response(request, exhibit, section, edit_item_pk=new_item.pk)
 
 
 # ---------------------------------------------------------------------------
@@ -615,25 +646,26 @@ def exhibit_generate_scope(request, pk):
         last = section.items.order_by('-order').values_list('order', flat=True).first()
         next_order = (last + 1) if last is not None else 0
 
-        items_to_create = []
-        for i, item_data in enumerate(section_data.get('items', [])):
+        parent_at_level = {}  # level -> last created ScopeItem at that level
+        order_offset = 0
+        for item_data in section_data.get('items', []):
             text = item_data.get('text', '').strip()
             level = int(item_data.get('level', 0))
             if not text:
                 continue
-            items_to_create.append(ScopeItem(
+            parent = parent_at_level.get(level - 1) if level > 0 else None
+            item = ScopeItem.objects.create(
                 section=section,
                 text=text,
                 level=level,
-                parent=None,
-                order=next_order + i,
+                parent=parent,
+                order=next_order + order_offset,
                 is_ai_generated=True,
                 is_pending_review=True,
                 created_by=request.user,
-            ))
-
-        if items_to_create:
-            ScopeItem.objects.bulk_create(items_to_create)
+            )
+            parent_at_level[level] = item
+            order_offset += 1
 
     exhibit.last_edited_by = request.user
     exhibit.save(update_fields=['last_edited_by', 'updated_at'])
@@ -861,10 +893,14 @@ def _apply_proposed_changes(exhibit, changes, user):
             if section and text:
                 last = section.items.order_by('-order').values_list('order', flat=True).first()
                 last_order = (last + 1) if last is not None else 0
+                parent = None
+                if level > 0:
+                    parent = section.items.filter(level=level - 1).order_by('-order').first()
                 ScopeItem.objects.create(
                     section=section,
                     text=text,
                     level=level,
+                    parent=parent,
                     order=last_order,
                     is_ai_generated=True,
                     is_pending_review=True,

@@ -69,6 +69,11 @@ urlpatterns = [
         views.item_outdent,
         name='item_outdent',
     ),
+    path(
+        '<int:pk>/sections/<int:section_pk>/items/<int:item_pk>/insert-below/',
+        views.item_insert_below,
+        name='item_insert_below',
+    ),
 
     # Exhibit-level actions
     path('<int:pk>/pending-banner/', views.pending_banner, name='pending_banner'),

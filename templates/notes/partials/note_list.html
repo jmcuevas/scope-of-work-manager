@@ -1,15 +1,19 @@
 <div id="notes-list">
 
-  <!-- Add note form -->
-  {% include "notes/partials/note_form.html" %}
+  <!-- Sticky add note form -->
+  <div class="sticky top-0 z-10 bg-white px-5 pt-5 pb-4 border-b border-gray-100">
+    {% include "notes/partials/note_form.html" %}
+  </div>
 
   <!-- Notes -->
-  {% if notes %}
-    {% for note in notes %}
-      {% include "notes/partials/note_card.html" %}
-    {% endfor %}
-  {% else %}
-    <p class="text-xs text-gray-400 italic">No notes for this trade yet.</p>
-  {% endif %}
+  <div class="px-5 py-4">
+    {% if notes %}
+      {% for note in notes %}
+        {% include "notes/partials/note_card.html" %}
+      {% endfor %}
+    {% else %}
+      <p class="text-xs text-gray-400 italic">No notes for this trade yet.</p>
+    {% endif %}
+  </div>
 
 </div>

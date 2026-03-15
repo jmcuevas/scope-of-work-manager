@@ -16,31 +16,42 @@
     <input type="hidden" name="note_type" value="{{ note.note_type }}">
 
     <!-- Primary trade -->
-    <select name="primary_trade"
-            required
-            class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
-      {% for trade in form.fields.primary_trade.queryset %}
-        <option value="{{ trade.pk }}" {% if note.primary_trade_id == trade.pk %}selected{% endif %}>
-          {{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}
-        </option>
-      {% endfor %}
-    </select>
-
-    <!-- Related trades -->
-    {% if form.fields.related_trades.queryset.exists %}
-    <details {% if note.related_trades.exists %}open{% endif %} class="text-xs text-gray-500">
-      <summary class="cursor-pointer hover:text-gray-700">Related trades (optional)</summary>
-      <div class="mt-1 space-y-1 pl-1">
-        {% for trade in form.fields.related_trades.queryset %}
-        <label class="flex items-center gap-1.5">
-          <input type="checkbox" name="related_trades" value="{{ trade.pk }}"
-                 {% if trade in note.related_trades.all %}checked{% endif %}
-                 class="rounded border-gray-300 text-primary-600 focus:ring-primary-400">
-          <span>{{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}</span>
-        </label>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Primary trade</label>
+      <select name="primary_trade"
+              required
+              class="w-full text-xs text-gray-700 border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400">
+        {% for trade in form.fields.primary_trade.queryset %}
+          <option value="{{ trade.pk }}" {% if note.primary_trade_id == trade.pk %}selected{% endif %}>
+            {{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}
+          </option>
         {% endfor %}
-      </div>
-    </details>
+      </select>
+    </div>
+
+    <!-- Related trades dropdown -->
+    {% if form.fields.related_trades.queryset.exists %}
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Related trades <span class="font-normal text-gray-400">(optional)</span></label>
+      <details class="relative" {% if note.related_trades.exists %}open{% endif %}>
+        <summary class="flex items-center justify-between w-full text-xs text-gray-600 border border-gray-200 rounded-md px-2 py-1.5 cursor-pointer select-none hover:border-primary-400 transition-colors list-none [&::-webkit-details-marker]:hidden">
+          <span>Select related trades…</span>
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+          </svg>
+        </summary>
+        <div class="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg py-1 max-h-48 overflow-y-auto">
+          {% for trade in form.fields.related_trades.queryset %}
+          <label class="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+            <input type="checkbox" name="related_trades" value="{{ trade.pk }}"
+                   {% if trade in note.related_trades.all %}checked{% endif %}
+                   class="rounded border-gray-300 text-primary-600 focus:ring-primary-400">
+            <span class="text-xs text-gray-700">{{ trade.csi_trade.csi_code }} — {{ trade.csi_trade.name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </details>
+    </div>
     {% endif %}
 
     <!-- Source -->
