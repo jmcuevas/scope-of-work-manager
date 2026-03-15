@@ -7,19 +7,18 @@
     <textarea name="text"
               rows="2"
               autofocus
+              onkeydown="
+                if(event.key==='Enter'){
+                  event.preventDefault();
+                  this._submitted=true;
+                  if(event.shiftKey){
+                    htmx.ajax('POST','{% url 'exhibits:item_insert_below' exhibit.pk section.pk item.pk %}',{target:'#items-{{ section.pk }}',swap:'innerHTML',values:{text:this.value}});
+                  } else {
+                    this.form.requestSubmit();
+                  }
+                }
+              "
+              onblur="if(!this._submitted){this._submitted=true;this.form.requestSubmit();}"
               class="w-full text-sm text-gray-700 border border-gray-200 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none">{{ item.text }}</textarea>
-    <div class="flex items-center gap-2 mt-2">
-      <button type="submit"
-              class="px-3 py-1.5 text-xs font-medium bg-primary-600 hover:bg-primary-700 text-white rounded-md transition-colors">
-        Save
-      </button>
-      <button type="button"
-              hx-get="{% url 'exhibits:item_edit' exhibit.pk section.pk item.pk %}?cancel=1"
-              hx-target="#item-{{ item.pk }}"
-              hx-swap="outerHTML"
-              class="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">
-        Cancel
-      </button>
-    </div>
   </form>
 </div>

@@ -1,79 +1,96 @@
 {% load exhibit_tags %}
 <div id="note-{{ note.pk }}"
-     class="py-2.5 border-b border-gray-100 last:border-0">
+     class="rounded-lg border border-gray-200 bg-white shadow-sm mb-3 overflow-hidden
+            {% if note.status == 'RESOLVED' %}border-l-4 border-l-green-400{% else %}border-l-4 border-l-amber-400{% endif %}">
 
-  {% if note.status == 'RESOLVED' %}
-  <div class="flex justify-end mb-1">
-    <span class="text-xs text-green-600 font-medium">✓ Resolved</span>
-  </div>
-  {% endif %}
+  <!-- Card body -->
+  <div class="relative px-3 pt-3 pb-2">
 
-  <!-- Scope item reference -->
-  {% if note.scope_item %}
-  {% with item_number=numbers|get_item:note.scope_item.pk %}
-  <button type="button"
-          onclick="highlightItem({{ note.scope_item.pk }})"
-          class="w-full text-left mb-1.5 bg-gray-50 hover:bg-primary-50 border border-gray-100 hover:border-primary-200 rounded px-2 py-1 transition-colors group/ref">
-    <p class="text-xs text-gray-400 group-hover/ref:text-primary-600 font-medium truncate">
-      {{ note.scope_item.section.name }}{% if item_number %} — {{ item_number }}{% endif %}
-    </p>
-  </button>
-  {% endwith %}
-  {% endif %}
-
-  <!-- Note text -->
-  <p class="text-xs text-gray-700 leading-relaxed mb-1">{{ note.text }}</p>
-
-  <!-- Trade info -->
-  <p class="text-xs text-gray-400 mb-0.5">
-    {{ note.primary_trade.csi_trade.csi_code }} — {{ note.primary_trade.csi_trade.name }}
-    {% with rt=note.related_trades.all %}
-      {% if rt %}
-        <span class="text-gray-300">·</span>
-        also: {% for t in rt %}{{ t.csi_trade.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
-      {% endif %}
+    <!-- Scope item reference -->
+    {% if note.scope_item %}
+    {% with item_number=numbers|get_item:note.scope_item.pk %}
+    <button type="button"
+            onclick="highlightItem({{ note.scope_item.pk }})"
+            class="inline-flex items-center gap-1 mb-2 text-xs text-primary-600 hover:text-primary-800 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0 1 1 0 00-1.414 1.414 4 4 0 005.656 0l3-3a4 4 0 00-5.656-5.656l-1.5 1.5a1 1 0 101.414 1.414l1.5-1.5zm-5 5a2 2 0 012.828 0 1 1 0 101.414-1.414 4 4 0 00-5.656 0l-3 3a4 4 0 105.656 5.656l1.5-1.5a1 1 0 10-1.414-1.414l-1.5 1.5a2 2 0 11-2.828-2.828l3-3z" clip-rule="evenodd" />
+      </svg>
+      <span class="truncate max-w-[160px]">{{ note.scope_item.section.name }}{% if item_number %} · {{ item_number }}{% endif %}</span>
+    </button>
     {% endwith %}
-  </p>
+    {% endif %}
 
-  <!-- Source -->
-  {% if note.source %}
-    <p class="text-xs text-gray-400 italic mb-1">{{ note.source }}</p>
-  {% endif %}
-
-  <!-- Resolution -->
-  {% if note.status == 'RESOLVED' and note.resolution %}
-    <p class="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1 mt-1">
-      <span class="font-medium">Resolution:</span> {{ note.resolution }}
-    </p>
-  {% endif %}
-
-  <!-- Actions -->
-  {% if note.status == 'OPEN' %}
-  <div class="flex items-center gap-3 mt-1.5">
+    {% if note.status == 'OPEN' %}
+    <!-- Edit pencil (top-right) -->
     <button hx-get="{% url 'notes:note_edit' note.pk %}"
             hx-target="#note-{{ note.pk }}"
             hx-swap="outerHTML"
-            class="text-xs text-gray-400 hover:text-gray-600 transition-colors">
-      Edit
+            title="Edit"
+            class="absolute top-3 right-3 text-gray-300 hover:text-gray-500 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+      </svg>
     </button>
+    {% endif %}
+
+    <!-- Note text -->
+    <p class="text-sm text-gray-800 leading-relaxed pr-5">{{ note.text }}</p>
+
+    <!-- Resolution -->
+    {% if note.status == 'RESOLVED' and note.resolution %}
+    <div class="mt-2 pt-2 border-t border-gray-100">
+      <p class="text-xs text-gray-600"><span class="font-medium text-green-600">✓ Resolution:</span> {{ note.resolution }}</p>
+    </div>
+    {% endif %}
+
   </div>
-  <details class="mt-1.5">
-    <summary class="text-xs text-primary-600 hover:text-primary-800 cursor-pointer">Resolve…</summary>
+
+  <!-- Card footer -->
+  <div class="px-3 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-2">
+    <div class="min-w-0 flex-1">
+      <p class="text-xs text-gray-500 truncate">
+        {{ note.primary_trade.csi_trade.csi_code }} — {{ note.primary_trade.csi_trade.name }}
+        {% with rt=note.related_trades.all %}
+          {% if rt %}
+            <span class="text-gray-300 mx-0.5">·</span>
+            {% for t in rt %}{{ t.csi_trade.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+          {% endif %}
+        {% endwith %}
+      </p>
+      {% if note.source %}
+      <p class="text-xs text-gray-400 italic">{{ note.source }}</p>
+      {% endif %}
+    </div>
+
+    {% if note.status == 'RESOLVED' %}
+    <span class="text-xs font-medium text-green-600 shrink-0">✓ Resolved</span>
+    {% else %}
+    <button type="button"
+            onclick="document.getElementById('resolve-form-{{ note.pk }}').classList.toggle('hidden')"
+            class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors shrink-0">
+      Resolve…
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- Resolve form (hidden until toggled) -->
+  {% if note.status == 'OPEN' %}
+  <div id="resolve-form-{{ note.pk }}" class="hidden px-3 py-3 border-t border-amber-100 bg-amber-50">
     <form hx-post="{% url 'notes:note_resolve' note.pk %}"
           hx-target="#note-{{ note.pk }}"
           hx-swap="outerHTML"
-          class="mt-1.5 space-y-1.5">
+          class="space-y-2">
       {% csrf_token %}
       <textarea name="resolution"
                 rows="2"
                 placeholder="How was this resolved? (optional)"
-                class="w-full text-xs text-gray-700 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none"></textarea>
+                class="w-full text-xs text-gray-700 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none bg-white"></textarea>
       <button type="submit"
               class="px-3 py-1 text-xs font-medium bg-green-600 hover:bg-green-700 text-white rounded transition-colors">
         Mark Resolved
       </button>
     </form>
-  </details>
+  </div>
   {% endif %}
 
 </div>
