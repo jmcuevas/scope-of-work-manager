@@ -5,6 +5,10 @@ class AIRequestLog(models.Model):
     class RequestType(models.TextChoices):
         SCOPE_FROM_DESCRIPTION = 'SCOPE_FROM_DESCRIPTION', 'Scope from Description'
         SCOPE_ITEM = 'SCOPE_ITEM', 'Scope Item'
+        REWRITE_ITEM = 'REWRITE_ITEM', 'Rewrite Item'
+        EXPAND_ITEM = 'EXPAND_ITEM', 'Expand Item'
+        CHAT = 'CHAT', 'Chat'
+        COMPLETENESS_CHECK = 'COMPLETENESS_CHECK', 'Completeness Check'
 
     request_type = models.CharField(max_length=30, choices=RequestType.choices)
     exhibit = models.ForeignKey(

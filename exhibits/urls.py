@@ -42,6 +42,16 @@ urlpatterns = [
         views.item_delete,
         name='item_delete',
     ),
+    path(
+        '<int:pk>/sections/<int:section_pk>/items/<int:item_pk>/accept-ai/',
+        views.item_accept_ai,
+        name='item_accept_ai',
+    ),
+    path(
+        '<int:pk>/sections/<int:section_pk>/items/<int:item_pk>/reject-ai/',
+        views.item_reject_ai,
+        name='item_reject_ai',
+    ),
 
     # Item hierarchy
     path(
@@ -61,8 +71,34 @@ urlpatterns = [
     ),
 
     # Exhibit-level actions
+    path('<int:pk>/pending-banner/', views.pending_banner, name='pending_banner'),
+    path('<int:pk>/accept-all-pending/', views.accept_all_pending_view, name='accept_all_pending'),
+    path('<int:pk>/reject-all-pending/', views.reject_all_pending_view, name='reject_all_pending'),
     path('<int:pk>/save-as-template/', views.exhibit_save_as_template, name='save_as_template'),
     path('<int:pk>/status/', views.exhibit_update_status, name='update_status'),
     path('<int:pk>/generate-scope/', views.exhibit_generate_scope, name='generate_scope'),
     path('<int:pk>/sections/<int:section_pk>/items/generate/', views.item_generate, name='item_generate'),
+    path('<int:pk>/sections/<int:section_pk>/items/add-gap/', views.add_gap_item, name='add_gap_item'),
+    path('<int:pk>/notes/<int:note_pk>/to-scope-item/', views.note_to_scope_item, name='note_to_scope_item'),
+
+    # AI panel
+    path('<int:pk>/ai-panel/', views.ai_panel, name='ai_panel'),
+    path('<int:pk>/check-completeness/', views.exhibit_check_completeness, name='check_completeness'),
+
+    # Section list (GET refresh endpoint)
+    path('<int:pk>/sections/', views.section_list, name='section_list'),
+
+    # AI chat overlay
+    path('<int:pk>/chat/', views.ai_chat, name='ai_chat'),
+    path('<int:pk>/chat/send/', views.ai_chat_send, name='ai_chat_send'),
+    path(
+        '<int:pk>/sections/<int:section_pk>/items/<int:item_pk>/rewrite/',
+        views.item_rewrite,
+        name='item_rewrite',
+    ),
+    path(
+        '<int:pk>/sections/<int:section_pk>/items/<int:item_pk>/expand/',
+        views.item_expand,
+        name='item_expand',
+    ),
 ]

@@ -330,3 +330,95 @@ Track progress phase by phase. Check items off as completed.
 - [x] Production readiness: `gunicorn` installed, `Procfile` created (migrate + collectstatic on release), `requirements.txt` generated *(2026-03-08)*
 - [ ] Seed production data: company, users, real trade templates, checklist items — do when deploying
 - [ ] Pilot launch: 2–3 PMs + PEs onboarded, onboarding guide written — post-deployment
+
+---
+
+## Phase 8: AI Assistant Redesign (Post-MVP)
+**Goal**: Upgrade the AI experience from a one-shot "Generate Scope" button to a fully interactive assistant with pending review workflow, contextual quick actions, and a conversational chat overlay.
+
+### Data Model Changes
+- [x] `ScopeItem.is_pending_review` (BooleanField, default=False) — migration `exhibits/0002_add_pending_review_to_scope_item.py` *(2026-03-13)*
+- [x] `ScopeItem.pending_original_text` (TextField, blank=True) — same migration *(2026-03-13)*
+- [x] `Note.scope_item` (FK → ScopeItem, nullable) — migration `notes/0002_add_scope_item_to_note.py` *(2026-03-13)*
+
+### Step 1: Accept/Reject Service Functions
+- [x] Write `accept_ai_item(item)` in `exhibits/services.py`: clears `is_pending_review`, clears `pending_original_text`, saves item *(2026-03-13)*
+- [x] Write `reject_ai_item(item)` in `exhibits/services.py`: if `pending_original_text` non-empty → restore `text` from it, clear pending fields; if empty → delete item and all descendants *(2026-03-13)*
+- [x] Write `accept_all_pending(exhibit)` in `exhibits/services.py`: bulk accept all items with `is_pending_review=True` *(2026-03-13)*
+- [x] Write `reject_all_pending(exhibit)` in `exhibits/services.py`: bulk reject all pending items (restore edits, delete new items) *(2026-03-13)*
+- [x] Tests for all four service functions in `exhibits/tests.py` — 7 tests, all passing *(2026-03-13)*
+
+### Step 2: Pending Item UI (Editor Display)
+- [x] Update `partials/item.html`: detect `is_pending_review` — edit proposals show amber left border + red strikethrough original + green proposed text; new items show green left border + ✨ prefix; both show Accept ✓ / Reject ✗ buttons *(2026-03-13)*
+- [x] Write `item_accept_ai` view (POST) in `exhibits/views.py`: calls `accept_ai_item()`, returns item list partial with `HX-Trigger: pendingChanged` *(2026-03-13)*
+- [x] Write `item_reject_ai` view (POST) in `exhibits/views.py`: calls `reject_ai_item()`, returns item list partial with `HX-Trigger: pendingChanged` *(2026-03-13)*
+- [x] Add URL patterns for `item_accept_ai` and `item_reject_ai` in `exhibits/urls.py` *(2026-03-13)*
+- [x] 7 view tests: accept/reject clears state or deletes, HX-Trigger header present, company isolation — all passing *(2026-03-13)*
+
+### Step 3: Pending Banner
+- [x] Create `partials/pending_banner.html`: shows "N AI suggestion(s) pending review" with Accept All / Reject All buttons; renders nothing when count is 0 *(2026-03-13)*
+- [x] Write `pending_banner` view (GET): queries `is_pending_review=True` count, returns banner partial *(2026-03-13)*
+- [x] Write `accept_all_pending_view` (POST): calls service, returns section list + `HX-Trigger: pendingChanged` *(2026-03-13)*
+- [x] Write `reject_all_pending_view` (POST): calls service, returns section list + `HX-Trigger: pendingChanged` *(2026-03-13)*
+- [x] Banner container in `editor.html` with `hx-trigger="load, pendingChanged from:body"` — self-fetches on load and refreshes after every accept/reject *(2026-03-13)*
+- [x] URL patterns for all three views added *(2026-03-13)*
+- [x] 7 tests: count correct, empty state, bulk actions, HX-Trigger header, company isolation — all passing *(2026-03-13)*
+
+### Step 4: Update Existing AI to Use Pending Review
+- [x] Update `exhibit_generate_scope` view: bulk-created items now have `is_pending_review=True`; response fires `HX-Trigger: pendingChanged`; success message updated to indicate review is needed *(2026-03-13)*
+- [x] Update `item_generate` view: AI-generated items now have `is_pending_review=True` and `original_input` stored; fallback (raw input) items remain non-pending; `HX-Trigger: pendingChanged` only fired on AI success *(2026-03-13)*
+- [ ] Update `generate_scope_from_description()` service: add completeness check — if exhibit has substantial content, include existing items in prompt context and ask Claude to check for gaps rather than regenerate everything
+
+### Step 5: New AI Service Functions
+- [x] Add `REWRITE_ITEM`, `EXPAND_ITEM`, `CHAT` choices to `AIRequestLog.RequestType`; migration `ai_services/0002_add_request_type_choices.py` *(2026-03-13)*
+- [x] Add `REWRITE_ITEM_SYSTEM_PROMPT`, `EXPAND_ITEM_SYSTEM_PROMPT`, `CHAT_SYSTEM_PROMPT` to `ai_services/prompts.py` *(2026-03-13)*
+- [x] Extended `_call_claude()` to accept `messages=` list for multi-turn chat (backward-compatible) *(2026-03-13)*
+- [x] Write `rewrite_scope_item(item, exhibit, instruction='')`: returns proposed new text string or None *(2026-03-13)*
+- [x] Write `expand_scope_item(item, exhibit)`: returns list of `{"text": "...", "level": N}` dicts or None *(2026-03-13)*
+- [x] Write `chat_with_exhibit(exhibit, conversation_history)`: injects live exhibit context into system prompt; returns `{"message": "...", "proposed_changes": [...]}` or None *(2026-03-13)*
+- [x] 16 tests across all three functions: success, malformed JSON, AI disabled, request type logged, instruction/history passed correctly — all passing *(2026-03-13)*
+
+### Step 6: Rewrite & Expand Item Actions
+- [x] Add ✨ icon to `item.html` hover controls (alongside ↑↓→← and trash) *(2026-03-13)*
+- [x] Clicking ✨ icon opens a small inline popover: "Rewrite…" (instruction textarea + Submit) and "Expand into sub-items" *(2026-03-13)*
+- [x] `toggleAIPanel` JS in `editor.html`: closes others, opens target, closes on outside click *(2026-03-13)*
+- [x] Write `item_rewrite` view (POST) in `exhibits/views.py`: calls `rewrite_scope_item()`; sets pending fields; returns diff item partial + `HX-Trigger: pendingChanged` *(2026-03-13)*
+- [x] Write `item_expand` view (POST) in `exhibits/views.py`: calls `expand_scope_item()`; creates child items with pending review; returns section item list + `HX-Trigger: pendingChanged` *(2026-03-13)*
+- [x] URL patterns for `item_rewrite` and `item_expand` added *(2026-03-13)*
+- [x] 10 view tests: pending fields correct, HX-Trigger header, no-op on AI failure, company isolation, POST-only — all passing *(2026-03-13)*
+
+### Step 7: AI Right Pane Tab
+- [x] Add "AI ✨" as third tab in `editor.html` right panel (alongside Notes and Final Review); only shown when `ai_enabled` *(2026-03-13)*
+- [x] Create `partials/ai_panel.html` with three states: item context (`?item_pk`), completeness results, and default *(2026-03-13)*
+  - Default: "Check Exhibit Completeness" button + open OPEN_QUESTION notes with section picker for conversion + per-section scroll links
+  - Item context: rewrite form + expand button (both targeting editor elements via HTMX)
+  - Completeness results: gap list with "Add to [section]" buttons; green "looks complete" state; error state
+- [x] `ai_panel` view (GET) with optional `?item_pk` param; `_ai_panel_context()` helper *(2026-03-13)*
+- [x] `exhibit_check_completeness` view (POST): calls `check_exhibit_completeness()` service; returns panel in suggestions state *(2026-03-13)*
+- [x] `note_to_scope_item` view (POST): calls `generate_scope_item()`, creates pending ScopeItem, links note to item *(2026-03-13)*
+- [x] `add_gap_item` view (POST): creates pending ScopeItem from suggestion text *(2026-03-13)*
+- [x] `check_exhibit_completeness()` service function + `COMPLETENESS_SYSTEM_PROMPT`; `AIRequestLog.RequestType.COMPLETENESS_CHECK` *(2026-03-13)*
+- [x] JS: `EXHIBIT_AI_PANEL_URL` global; `switchTab('ai')` triggers htmx.ajax to load panel; `updateAIPanel(itemPk)` called from ✨ button if AI tab is active *(2026-03-13)*
+- [x] `id="section-ai-input-{{ section.pk }}"` on Ask AI input in `section.html` for scroll-to links *(2026-03-13)*
+- [x] 28 new tests across service + 4 view classes: company isolation, AI failure handling, pending fields, note linking — all passing *(2026-03-13)*
+
+### Step 8: Full-Screen Chat Overlay
+- [x] "Chat with AI ✨" button in `editor.html` header (only when `ai_enabled`); opens overlay via `openChatOverlay()` *(2026-03-13)*
+- [x] `ai_chat_overlay.html`: fixed full-screen overlay (z-50); greeting message; scrollable chat history; textarea input with Enter-to-send; loading spinner on Send button *(2026-03-13)*
+- [x] `partials/ai_chat_messages.html`: two-bubble partial (user + assistant) returned by `ai_chat_send`; carries `data-history` attribute for JS to read updated history *(2026-03-13)*
+- [x] `ai_chat` view (GET): returns overlay template *(2026-03-13)*
+- [x] `ai_chat_send` view (POST): receives message + history JSON; builds full conversation; calls `chat_with_exhibit()`; applies proposed changes via `_apply_proposed_changes()`; returns message pair partial *(2026-03-13)*
+- [x] `_apply_proposed_changes()` helper: handles `add` (pending ScopeItem), `edit` (pending diff), `delete` (immediate) *(2026-03-13)*
+- [x] Conversation history managed client-side: `window.chatHistory` array; `htmx:configRequest` injects it before each POST; `htmx:afterSwap` reads updated history from `data-history` attribute *(2026-03-13)*
+- [x] `section_list` GET view + URL (`<int:pk>/sections/`): refreshes section list after chat overlay closes *(2026-03-13)*
+- [x] JS: `openChatOverlay()` (loads overlay once via HTMX, re-shows if already loaded); `closeChatOverlay()` (hides overlay, refreshes section list) *(2026-03-13)*
+- [x] `HX-Trigger: pendingChanged` fired when changes are applied; section list refreshed on overlay close *(2026-03-13)*
+- [x] 14 tests: overlay load, send with add/edit changes, history threading, AI failure, empty message, company isolation — all passing *(2026-03-13)*
+
+### Step 9: Tests
+- [x] Accept/reject item view tests (accept clears pending, reject restores/deletes, company isolation) — 7 tests *(2026-03-13)*
+- [x] Bulk accept/reject tests (all pending items affected, banner count correct) — covered in pending banner suite *(2026-03-13)*
+- [x] Pending banner view tests (count correct, clears after bulk actions, company isolation) — 7 tests *(2026-03-13)*
+- [x] `item_rewrite` view tests (pending fields set correctly, mocked Claude, no-op on failure, company isolation) — 5 tests *(2026-03-13)*
+- [x] `item_expand` view tests (child items created as pending, parent FK correct, mocked Claude) — 5 tests *(2026-03-13)*
+- [x] `ai_chat_send` view tests (add/edit/delete changes, history threading, AI failure, company isolation) — 10 tests *(2026-03-13)*

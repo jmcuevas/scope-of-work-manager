@@ -1,15 +1,17 @@
+import json as _json
+
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from ai_services.services import AIDisabledError, AIServiceError, generate_scope_from_description, generate_scope_item
+from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, expand_scope_item, generate_scope_from_description, generate_scope_item, rewrite_scope_item
 from django.conf import settings
 from notes.forms import NoteForm
 from notes.models import Note
 from projects.models import Project, Trade
 
 from .models import ExhibitSection, ScopeExhibit, ScopeItem
-from .services import clone_exhibit, compute_section_numbering, create_blank_exhibit, flatten_section_items, indent_item, outdent_item, save_as_template
+from .services import accept_ai_item, accept_all_pending, clone_exhibit, compute_section_numbering, create_blank_exhibit, flatten_section_items, indent_item, outdent_item, reject_ai_item, reject_all_pending, save_as_template
 
 
 def _get_trade(project_pk, trade_pk, user):
@@ -340,6 +342,30 @@ def item_delete(request, pk, section_pk, item_pk):
     return _item_list_response(request, exhibit, section)
 
 
+@login_required
+@require_POST
+def item_accept_ai(request, pk, section_pk, item_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+    item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
+    accept_ai_item(item)
+    response = _item_list_response(request, exhibit, section)
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+@login_required
+@require_POST
+def item_reject_ai(request, pk, section_pk, item_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+    item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
+    reject_ai_item(item)
+    response = _item_list_response(request, exhibit, section)
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Item hierarchy — stubs (implemented in subsequent steps)
 # ---------------------------------------------------------------------------
@@ -386,6 +412,45 @@ def item_outdent(request, pk, section_pk, item_pk):
     item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
     outdent_item(item)
     return _item_list_response(request, exhibit, section)
+
+
+# ---------------------------------------------------------------------------
+# Pending banner (AI review)
+# ---------------------------------------------------------------------------
+
+@login_required
+def pending_banner(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    pending_count = ScopeItem.objects.filter(
+        section__scope_exhibit=exhibit,
+        is_pending_review=True,
+    ).count()
+    return render(request, 'exhibits/partials/pending_banner.html', {
+        'exhibit': exhibit,
+        'pending_count': pending_count,
+    })
+
+
+@login_required
+@require_POST
+def accept_all_pending_view(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    accept_all_pending(exhibit)
+    response = _section_list_response(request, exhibit)
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+@login_required
+@require_POST
+def reject_all_pending_view(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    reject_all_pending(exhibit)
+    response = _section_list_response(request, exhibit)
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
 @login_required
 @require_POST
 def exhibit_save_as_template(request, pk):
@@ -440,6 +505,84 @@ def exhibit_update_status(request, pk):
 
 
 # ---------------------------------------------------------------------------
+# AI: Per-item rewrite and expand
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_POST
+def item_rewrite(request, pk, section_pk, item_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+    item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
+
+    instruction = request.POST.get('instruction', '').strip()
+    try:
+        proposed_text = rewrite_scope_item(item, exhibit, instruction=instruction)
+    except (AIDisabledError, AIServiceError):
+        proposed_text = None
+
+    if proposed_text:
+        item.pending_original_text = item.text
+        item.text = proposed_text
+        item.is_pending_review = True
+        item.is_ai_generated = True
+        item.save(update_fields=['text', 'pending_original_text', 'is_pending_review', 'is_ai_generated', 'updated_at'])
+
+    numbers = compute_section_numbering(section)
+    response = render(request, 'exhibits/partials/item.html', {
+        'exhibit': exhibit,
+        'section': section,
+        'item': item,
+        'numbers': numbers,
+        'item_note_counts': _item_note_counts(exhibit),
+        'ai_enabled': settings.AI_ENABLED,
+    })
+    if proposed_text:
+        response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+@login_required
+@require_POST
+def item_expand(request, pk, section_pk, item_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+    item = get_object_or_404(ScopeItem, pk=item_pk, section=section)
+
+    try:
+        child_items = expand_scope_item(item, exhibit)
+    except (AIDisabledError, AIServiceError):
+        child_items = None
+
+    if child_items:
+        last = (
+            ScopeItem.objects.filter(section=section, parent=item)
+            .order_by('-order')
+            .values_list('order', flat=True)
+            .first()
+        )
+        next_order = (last + 1) if last is not None else 0
+        ScopeItem.objects.bulk_create([
+            ScopeItem(
+                section=section,
+                parent=item,
+                level=entry['level'],
+                text=entry['text'],
+                order=next_order + i,
+                is_ai_generated=True,
+                is_pending_review=True,
+                created_by=request.user,
+            )
+            for i, entry in enumerate(child_items)
+        ])
+
+    response = _item_list_response(request, exhibit, section)
+    if child_items:
+        response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+# ---------------------------------------------------------------------------
 # AI: Generate full scope from description
 # ---------------------------------------------------------------------------
 
@@ -485,6 +628,7 @@ def exhibit_generate_scope(request, pk):
                 parent=None,
                 order=next_order + i,
                 is_ai_generated=True,
+                is_pending_review=True,
                 created_by=request.user,
             ))
 
@@ -494,8 +638,10 @@ def exhibit_generate_scope(request, pk):
     exhibit.last_edited_by = request.user
     exhibit.save(update_fields=['last_edited_by', 'updated_at'])
 
-    messages.success(request, 'Scope generated. Review and edit the items below.')
-    return _section_list_response(request, exhibit)
+    messages.success(request, 'Scope generated — review and accept or reject each suggestion.')
+    response = _section_list_response(request, exhibit)
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -518,16 +664,298 @@ def item_generate(request, pk, section_pk):
         # Fall back to saving the raw input as a plain item
         exhibit_text = None
 
+    ai_succeeded = exhibit_text is not None
     text = exhibit_text or input_text
     last = section.items.order_by('-order').values_list('order', flat=True).first()
     last_order = last if last is not None else -1
     ScopeItem.objects.create(
         section=section,
         text=text,
+        original_input=input_text,
         level=0,
         parent=None,
         order=last_order + 1,
-        is_ai_generated=exhibit_text is not None,
+        is_ai_generated=ai_succeeded,
+        is_pending_review=ai_succeeded,
         created_by=request.user,
     )
-    return _item_list_response(request, exhibit, section)
+    response = _item_list_response(request, exhibit, section)
+    if ai_succeeded:
+        response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+# ---------------------------------------------------------------------------
+# AI panel (right pane tab)
+# ---------------------------------------------------------------------------
+
+def _ai_panel_context(exhibit, item_pk=None, suggestions=None, error=None):
+    """Build the context dict for the ai_panel partial."""
+    sections = list(exhibit.sections.prefetch_related('items').order_by('order'))
+
+    selected_item = None
+    if item_pk:
+        try:
+            selected_item = ScopeItem.objects.select_related('section').get(
+                pk=item_pk, section__scope_exhibit=exhibit
+            )
+        except ScopeItem.DoesNotExist:
+            pass
+
+    # Open questions for this exhibit's trade that haven't been converted yet
+    open_notes = []
+    if exhibit.project:
+        from django.db.models import Q
+        trade = exhibit.project.trades.filter(csi_trade=exhibit.csi_trade).first()
+        if trade:
+            open_notes = list(
+                Note.objects.filter(
+                    Q(primary_trade=trade) | Q(related_trades=trade),
+                    note_type=Note.NoteType.OPEN_QUESTION,
+                    status=Note.Status.OPEN,
+                    scope_item__isnull=True,
+                ).distinct().select_related('primary_trade__csi_trade')[:10]
+            )
+
+    # Attach matching section object to each suggestion
+    if suggestions is not None:
+        section_by_name = {s.name.lower(): s for s in sections}
+        for gap in suggestions:
+            gap['section'] = section_by_name.get(gap.get('section_name', '').lower())
+
+    return {
+        'exhibit': exhibit,
+        'sections': sections,
+        'selected_item': selected_item,
+        'suggestions': suggestions,
+        'open_notes': open_notes,
+        'error': error,
+        'ai_enabled': settings.AI_ENABLED,
+    }
+
+
+@login_required
+def ai_panel(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    item_pk = request.GET.get('item_pk')
+    ctx = _ai_panel_context(exhibit, item_pk=item_pk)
+    return render(request, 'exhibits/partials/ai_panel.html', ctx)
+
+
+@login_required
+@require_POST
+def exhibit_check_completeness(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    suggestions = None
+    error = None
+    try:
+        suggestions = check_exhibit_completeness(exhibit)
+    except AIDisabledError:
+        error = 'AI is disabled.'
+        suggestions = []
+    except AIServiceError as e:
+        error = str(e)
+        suggestions = []
+    ctx = _ai_panel_context(exhibit, suggestions=suggestions, error=error)
+    return render(request, 'exhibits/partials/ai_panel.html', ctx)
+
+
+@login_required
+@require_POST
+def note_to_scope_item(request, pk, note_pk):
+    """Convert an open question note into a pending scope item."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    note = get_object_or_404(
+        Note, pk=note_pk, project=exhibit.project, project__company=request.user.company
+    )
+    section_pk = request.POST.get('section_pk')
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+
+    try:
+        exhibit_text = generate_scope_item(note.text, exhibit, section)
+    except (AIDisabledError, AIServiceError):
+        exhibit_text = None
+
+    ai_succeeded = exhibit_text is not None
+    text = exhibit_text or note.text
+    last = section.items.order_by('-order').values_list('order', flat=True).first()
+    last_order = last if last is not None else -1
+    item = ScopeItem.objects.create(
+        section=section,
+        text=text,
+        original_input=note.text,
+        level=0,
+        order=last_order + 1,
+        is_ai_generated=ai_succeeded,
+        is_pending_review=ai_succeeded,
+        created_by=request.user,
+    )
+    note.scope_item = item
+    note.save(update_fields=['scope_item', 'updated_at'])
+
+    response = _section_list_response(request, exhibit)
+    if ai_succeeded:
+        response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+@login_required
+@require_POST
+def add_gap_item(request, pk, section_pk):
+    """Add a suggested gap item from the completeness check as a pending scope item."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+    text = request.POST.get('text', '').strip()
+    if not text:
+        return _item_list_response(request, exhibit, section)
+
+    last = section.items.order_by('-order').values_list('order', flat=True).first()
+    last_order = last if last is not None else -1
+    ScopeItem.objects.create(
+        section=section,
+        text=text,
+        level=0,
+        order=last_order + 1,
+        is_ai_generated=True,
+        is_pending_review=True,
+        created_by=request.user,
+    )
+    response = _item_list_response(request, exhibit, section)
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Section list (GET endpoint for HTMX refresh)
+# ---------------------------------------------------------------------------
+
+@login_required
+def section_list(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    return _section_list_response(request, exhibit)
+
+
+# ---------------------------------------------------------------------------
+# AI chat overlay
+# ---------------------------------------------------------------------------
+
+def _apply_proposed_changes(exhibit, changes, user):
+    """
+    Apply Claude's proposed add/edit/delete actions as pending scope items.
+    Returns the number of changes successfully applied.
+    """
+    applied = 0
+    section_by_name = {
+        s.name.lower(): s
+        for s in exhibit.sections.prefetch_related('items').order_by('order')
+    }
+
+    for change in changes:
+        action = change.get('action')
+
+        if action == 'add':
+            section_name = change.get('section_name', '').strip()
+            text = change.get('text', '').strip()
+            level = int(change.get('level', 0))
+            section = section_by_name.get(section_name.lower())
+            if section and text:
+                last = section.items.order_by('-order').values_list('order', flat=True).first()
+                last_order = (last + 1) if last is not None else 0
+                ScopeItem.objects.create(
+                    section=section,
+                    text=text,
+                    level=level,
+                    order=last_order,
+                    is_ai_generated=True,
+                    is_pending_review=True,
+                    created_by=user,
+                )
+                applied += 1
+
+        elif action == 'edit':
+            item_pk = change.get('target_item_pk')
+            text = change.get('text', '').strip()
+            if item_pk and text:
+                try:
+                    item = ScopeItem.objects.get(pk=item_pk, section__scope_exhibit=exhibit)
+                    item.pending_original_text = item.text
+                    item.text = text
+                    item.is_pending_review = True
+                    item.is_ai_generated = True
+                    item.save(update_fields=['text', 'pending_original_text', 'is_pending_review', 'is_ai_generated', 'updated_at'])
+                    applied += 1
+                except ScopeItem.DoesNotExist:
+                    pass
+
+        elif action == 'delete':
+            item_pk = change.get('target_item_pk')
+            if item_pk:
+                try:
+                    item = ScopeItem.objects.get(pk=item_pk, section__scope_exhibit=exhibit)
+                    item.delete()
+                    applied += 1
+                except ScopeItem.DoesNotExist:
+                    pass
+
+    return applied
+
+
+@login_required
+def ai_chat(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    return render(request, 'exhibits/ai_chat_overlay.html', {
+        'exhibit': exhibit,
+        'ai_enabled': settings.AI_ENABLED,
+    })
+
+
+@login_required
+@require_POST
+def ai_chat_send(request, pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    user_message = request.POST.get('message', '').strip()
+    history_json = request.POST.get('history', '[]')
+
+    if not user_message:
+        from django.http import HttpResponse
+        return HttpResponse('')
+
+    try:
+        history = _json.loads(history_json)
+        if not isinstance(history, list):
+            history = []
+    except (_json.JSONDecodeError, ValueError):
+        history = []
+
+    conversation = history + [{'role': 'user', 'content': user_message}]
+
+    assistant_message = None
+    changes_applied = 0
+    error = False
+
+    try:
+        result = chat_with_exhibit(exhibit, conversation)
+        if result:
+            assistant_message = result.get('message', '').strip()
+            proposed_changes = result.get('proposed_changes', [])
+            if proposed_changes:
+                changes_applied = _apply_proposed_changes(exhibit, proposed_changes, request.user)
+    except (AIDisabledError, AIServiceError) as e:
+        assistant_message = f'Sorry, I ran into an error: {e}'
+        error = True
+
+    if not assistant_message:
+        assistant_message = 'Sorry, I could not generate a response. Please try again.'
+
+    updated_history = conversation + [{'role': 'assistant', 'content': assistant_message}]
+
+    response = render(request, 'exhibits/partials/ai_chat_messages.html', {
+        'user_message': user_message,
+        'assistant_message': assistant_message,
+        'history_json': _json.dumps(updated_history),
+        'changes_applied': changes_applied,
+        'error': error,
+    })
+    if changes_applied:
+        response['HX-Trigger'] = 'pendingChanged'
+    return response

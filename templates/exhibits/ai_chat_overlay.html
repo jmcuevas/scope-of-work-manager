@@ -1,0 +1,94 @@
+{% load exhibit_tags %}
+<div id="ai-chat-overlay" class="fixed inset-0 z-50 bg-white flex flex-col">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white shrink-0">
+    <div>
+      <h2 class="text-base font-semibold text-gray-800">Chat with AI ✨</h2>
+      <p class="text-xs text-gray-500 mt-0.5">
+        {{ exhibit.csi_trade.name }}
+        {% if exhibit.project %} · {{ exhibit.project.name }}{% endif %}
+      </p>
+    </div>
+    <button onclick="closeChatOverlay()"
+            class="text-gray-400 hover:text-gray-700 transition-colors p-1.5 rounded-md hover:bg-gray-100">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+      </svg>
+    </button>
+  </div>
+
+  <!-- Message history -->
+  <div id="chat-messages" class="flex-1 overflow-y-auto px-6 py-6 space-y-4 max-w-3xl w-full mx-auto">
+    <!-- Initial assistant greeting -->
+    <div class="flex justify-start">
+      <div class="max-w-[80%] bg-gray-100 text-gray-800 rounded-2xl rounded-bl-sm px-4 py-3">
+        <p class="text-sm leading-relaxed">
+          Hi! I can help you develop the scope for <strong>{{ exhibit.csi_trade.name }}</strong>.
+          Tell me what to add, edit, or restructure — I'll propose changes for your review.
+        </p>
+        <p class="text-xs text-gray-500 mt-2">
+          Example: "Add a section about BIM coordination" or "The project has a raised floor — update the scope."
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Input area -->
+  <div class="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
+    <div class="max-w-3xl mx-auto">
+      <form id="chat-form"
+            hx-post="{% url 'exhibits:ai_chat_send' exhibit.pk %}"
+            hx-target="#chat-messages"
+            hx-swap="beforeend"
+            hx-indicator="#chat-send-spinner"
+            hx-disabled-elt="find button[type='submit'], find textarea">
+        {% csrf_token %}
+        <input type="hidden" name="history" id="chat-history-input" value="[]">
+        <div class="flex gap-3 items-end">
+          <textarea id="chat-message-input"
+                    name="message"
+                    rows="2"
+                    placeholder="Ask me to add, edit, or restructure scope items…"
+                    class="flex-1 text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none"
+                    onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); this.form.requestSubmit();}"></textarea>
+          <button type="submit"
+                  class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white rounded-lg transition-colors shrink-0">
+            <span id="chat-send-spinner" class="htmx-indicator">⏳</span>
+            Send ✨
+          </button>
+        </div>
+      </form>
+      <p class="text-xs text-gray-400 mt-2">Changes proposed by AI are queued as pending items for your review. Press Enter to send, Shift+Enter for a new line.</p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // Initialise conversation history from DOM (empty on fresh load)
+  if (typeof window.chatHistory === 'undefined') {
+    window.chatHistory = [];
+  }
+
+  // Before each HTMX request from the chat form, inject the current history
+  document.getElementById('chat-form').addEventListener('htmx:configRequest', function(evt) {
+    document.getElementById('chat-history-input').value = JSON.stringify(window.chatHistory);
+  });
+
+  // After each message pair is swapped in:
+  // 1. Read updated history from the response's data-history attribute
+  // 2. Scroll to bottom
+  // 3. Clear the input
+  document.getElementById('chat-messages').addEventListener('htmx:afterSwap', function(evt) {
+    var msgs = evt.detail.target.querySelectorAll('[data-history]');
+    if (msgs.length > 0) {
+      try {
+        window.chatHistory = JSON.parse(msgs[msgs.length - 1].dataset.history);
+      } catch(e) {}
+    }
+    evt.detail.target.scrollTop = evt.detail.target.scrollHeight;
+    var input = document.getElementById('chat-message-input');
+    if (input) input.value = '';
+  });
+</script>

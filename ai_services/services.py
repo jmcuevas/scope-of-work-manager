@@ -5,7 +5,14 @@ import anthropic
 from django.conf import settings
 
 from .models import AIRequestLog
-from .prompts import SCOPE_FROM_DESCRIPTION_SYSTEM_PROMPT, SCOPE_ITEM_SYSTEM_PROMPT
+from .prompts import (
+    CHAT_SYSTEM_PROMPT,
+    COMPLETENESS_SYSTEM_PROMPT,
+    EXPAND_ITEM_SYSTEM_PROMPT,
+    REWRITE_ITEM_SYSTEM_PROMPT,
+    SCOPE_FROM_DESCRIPTION_SYSTEM_PROMPT,
+    SCOPE_ITEM_SYSTEM_PROMPT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -30,15 +37,19 @@ def _get_client():
     return anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
-def _call_claude(system_prompt, user_prompt, exhibit=None, request_type=None):
+def _call_claude(system_prompt, user_prompt=None, messages=None, exhibit=None, request_type=None):
     """
     Send a request to Claude and return the response text.
 
-    - 30 second timeout per attempt
-    - Retries once on server errors (5xx)
-    - Logs every attempt to AIRequestLog (success or failure)
-    - Raises AIServiceError if all attempts fail
+    - Pass user_prompt for single-turn requests (builds messages list internally).
+    - Pass messages directly for multi-turn chat (list of {role, content} dicts).
+    - Retries once on server errors (5xx).
+    - Logs every attempt to AIRequestLog (success or failure).
+    - Raises AIServiceError if all attempts fail.
     """
+    if messages is None:
+        messages = [{'role': 'user', 'content': user_prompt}]
+
     client = _get_client()
     last_error = None
 
@@ -49,7 +60,7 @@ def _call_claude(system_prompt, user_prompt, exhibit=None, request_type=None):
                 model='claude-sonnet-4-6',
                 max_tokens=4096,
                 system=system_prompt,
-                messages=[{'role': 'user', 'content': user_prompt}],
+                messages=messages,
             )
             latency_ms = int((time.monotonic() - start) * 1000)
             tokens = response.usage.input_tokens + response.usage.output_tokens
@@ -200,3 +211,182 @@ EXISTING SCOPE CONTEXT (for reference — do not duplicate):
     if parsed is None:
         return None
     return parsed.get('exhibit_text', '').strip() or None
+
+
+def rewrite_scope_item(item, exhibit, instruction=''):
+    """
+    Propose a rewrite of an existing scope item.
+
+    Returns the proposed new text string, or None if the response could not be parsed.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    user_prompt_parts = [
+        f'TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}',
+        f'SECTION: {item.section.name}',
+        f'EXISTING ITEM: {item.text}',
+    ]
+    if instruction:
+        user_prompt_parts.append(f'INSTRUCTION: {instruction}')
+
+    user_prompt = '\n'.join(user_prompt_parts)
+
+    text = _call_claude(
+        system_prompt=REWRITE_ITEM_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.REWRITE_ITEM,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None:
+        return None
+    return parsed.get('exhibit_text', '').strip() or None
+
+
+def expand_scope_item(item, exhibit):
+    """
+    Expand a scope item into a list of child sub-items.
+
+    Returns a list of {"text": "...", "level": N} dicts, or None on failure.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    child_level = item.level + 1
+
+    user_prompt = f"""
+TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+SECTION: {item.section.name}
+PARENT ITEM (level {item.level}): {item.text}
+CHILD LEVEL: {child_level}
+
+Generate 2–5 sub-items that clarify or detail the parent item above.
+All items must use level = {child_level}.
+""".strip()
+
+    text = _call_claude(
+        system_prompt=EXPAND_ITEM_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.EXPAND_ITEM,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None:
+        return None
+    items = parsed.get('items', [])
+    # Validate and normalise each item
+    result = []
+    for entry in items:
+        text_val = entry.get('text', '').strip()
+        if text_val:
+            result.append({'text': text_val, 'level': child_level})
+    return result or None
+
+
+def check_exhibit_completeness(exhibit):
+    """
+    Identify scope items that may be missing from the exhibit.
+
+    Returns a list of gap dicts:
+        [{"section_name": "...", "text": "...", "reason": "..."}]
+    or None if the response could not be parsed.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    section_names = list(exhibit.sections.order_by('order').values_list('name', flat=True))
+    existing_scope = _build_existing_scope_context(exhibit)
+
+    project = exhibit.project
+    user_prompt = f"""
+Review this exhibit for missing scope items.
+
+TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+PROJECT TYPE: {project.project_type if project and project.project_type else 'Not specified'}
+SCOPE DESCRIPTION: {exhibit.scope_description or 'Not provided'}
+
+AVAILABLE SECTIONS (section_name must match one of these exactly):
+{chr(10).join(f'- {name}' for name in section_names)}
+
+CURRENT EXHIBIT CONTENT:
+{existing_scope}
+
+What important scope items are missing from this exhibit?
+""".strip()
+
+    text = _call_claude(
+        system_prompt=COMPLETENESS_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.COMPLETENESS_CHECK,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None or 'gaps' not in parsed:
+        return None
+    return [
+        g for g in parsed['gaps']
+        if g.get('text', '').strip() and g.get('section_name', '').strip()
+    ] or []
+
+
+def chat_with_exhibit(exhibit, conversation_history):
+    """
+    Multi-turn conversational AI for exhibit-level assistance.
+
+    conversation_history: list of {"role": "user"|"assistant", "content": "..."} dicts.
+
+    Returns a dict:
+        {
+            "message": "...",           # assistant reply to display
+            "proposed_changes": [...]   # list of change dicts (may be empty)
+        }
+    or None if the response could not be parsed.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    existing_scope = _build_existing_scope_context(exhibit)
+    section_names = list(exhibit.sections.order_by('order').values_list('name', flat=True))
+
+    # Build the system prompt with live exhibit context injected
+    system_prompt = CHAT_SYSTEM_PROMPT + f"""
+
+CURRENT EXHIBIT CONTEXT:
+Trade: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+Project: {exhibit.project.name if exhibit.project else 'Template'}
+Available sections: {', '.join(section_names)}
+
+Current scope:
+{existing_scope}
+"""
+
+    text = _call_claude(
+        system_prompt=system_prompt,
+        messages=conversation_history,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.CHAT,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None:
+        return None
+    return {
+        'message': parsed.get('message', '').strip(),
+        'proposed_changes': parsed.get('proposed_changes', []),
+    }
