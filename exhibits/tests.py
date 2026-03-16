@@ -1267,7 +1267,7 @@ class TestAIChatView:
         url = reverse('exhibits:ai_chat', args=[exhibit.pk])
         response = client.get(url)
         assert response.status_code == 200
-        assert b'ai-chat-overlay' in response.content
+        assert b'chat-messages' in response.content
 
     def test_company_isolation(self, client):
         user_b = PMUserFactory()
@@ -1407,3 +1407,48 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         response = client.get(url)
         assert response.status_code == 405
+
+    def test_context_section_injected(self, client):
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {'message': 'Got it!', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
+            client.post(url, {
+                'message': 'Add seismic bracing.',
+                'history': '[]',
+                'context_section_pks': [section.pk],
+            })
+        conversation = mock_chat.call_args[0][1]
+        assert f'Section "{section.name}"' in conversation[0]['content']
+        assert 'Add seismic bracing.' in conversation[0]['content']
+
+    def test_context_note_injected(self, client):
+        from notes.models import Note
+        user, exhibit, section = self._setup(client)
+        trade = exhibit.project.trades.filter(csi_trade=exhibit.csi_trade).first()
+        note = NoteFactory(
+            project=exhibit.project,
+            primary_trade=trade,
+            note_type=Note.NoteType.OPEN_QUESTION,
+            text='Fire stopping at penetrations required.',
+            created_by=user,
+        )
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {'message': 'Done!', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
+            client.post(url, {
+                'message': 'Convert this note.',
+                'history': '[]',
+                'context_note_pks': [note.pk],
+            })
+        conversation = mock_chat.call_args[0][1]
+        assert 'Fire stopping at penetrations required.' in conversation[0]['content']
+
+    def test_no_context_no_prefix(self, client):
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {'message': 'OK', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
+            client.post(url, {'message': 'Hello', 'history': '[]'})
+        conversation = mock_chat.call_args[0][1]
+        assert conversation[0]['content'] == 'Hello'
