@@ -1,5 +1,6 @@
 {% load exhibit_tags %}
 <div id="note-{{ note.pk }}"
+     {% if note.scope_item %}data-item-pk="{{ note.scope_item.pk }}"{% endif %}
      class="rounded-lg border border-gray-200 bg-white shadow-sm mb-3 overflow-hidden
             {% if note.status == 'RESOLVED' %}border-l-4 border-l-green-400{% else %}border-l-4 border-l-amber-400{% endif %}">
 

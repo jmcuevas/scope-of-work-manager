@@ -734,19 +734,16 @@ def _ai_panel_context(exhibit, item_pk=None, suggestions=None, error=None):
         except ScopeItem.DoesNotExist:
             pass
 
-    # Open questions for this exhibit's trade that haven't been converted yet
-    open_notes = []
+    # All notes for this exhibit's trade (for context chip picker)
+    notes = []
     if exhibit.project:
         from django.db.models import Q
         trade = exhibit.project.trades.filter(csi_trade=exhibit.csi_trade).first()
         if trade:
-            open_notes = list(
+            notes = list(
                 Note.objects.filter(
                     Q(primary_trade=trade) | Q(related_trades=trade),
-                    note_type=Note.NoteType.OPEN_QUESTION,
-                    status=Note.Status.OPEN,
-                    scope_item__isnull=True,
-                ).distinct().select_related('primary_trade__csi_trade')[:10]
+                ).distinct().order_by('-created_at').select_related('primary_trade__csi_trade')
             )
 
     # Attach matching section object to each suggestion
@@ -760,7 +757,7 @@ def _ai_panel_context(exhibit, item_pk=None, suggestions=None, error=None):
         'sections': sections,
         'selected_item': selected_item,
         'suggestions': suggestions,
-        'open_notes': open_notes,
+        'notes': notes,
         'error': error,
         'ai_enabled': settings.AI_ENABLED,
     }
@@ -939,10 +936,7 @@ def _apply_proposed_changes(exhibit, changes, user):
 @login_required
 def ai_chat(request, pk):
     exhibit = _company_exhibit_or_404(pk, request.user)
-    return render(request, 'exhibits/ai_chat_overlay.html', {
-        'exhibit': exhibit,
-        'ai_enabled': settings.AI_ENABLED,
-    })
+    return render(request, 'exhibits/partials/chat_side_panel.html', _ai_panel_context(exhibit))
 
 
 @login_required
@@ -955,6 +949,19 @@ def ai_chat_send(request, pk):
     if not user_message:
         from django.http import HttpResponse
         return HttpResponse('')
+
+    # Build context prefix from selected chips
+    context_section_pks = request.POST.getlist('context_section_pks')
+    context_note_pks = request.POST.getlist('context_note_pks')
+    context_parts = []
+    if context_section_pks:
+        for s in ExhibitSection.objects.filter(pk__in=context_section_pks, scope_exhibit=exhibit).order_by('order'):
+            context_parts.append(f'Section "{s.name}"')
+    if context_note_pks and exhibit.project:
+        for n in Note.objects.filter(pk__in=context_note_pks, project=exhibit.project):
+            context_parts.append(f'Note: "{n.text[:300]}"')
+    if context_parts:
+        user_message = '[Context: ' + '; '.join(context_parts) + ']\n\n' + user_message
 
     try:
         history = _json.loads(history_json)

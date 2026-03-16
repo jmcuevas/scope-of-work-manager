@@ -1,42 +1,61 @@
-<div id="review-item-{{ item.pk }}" class="py-2.5 border-b border-gray-100 last:border-0">
+{% with addressed=item.pm_response %}
+<div id="review-item-{{ item.pk }}"
+     class="rounded-lg border border-gray-200 bg-white shadow-sm mb-3 overflow-hidden
+            {% if addressed %}border-l-4 border-l-green-400
+            {% elif item.status == 'PASS' %}border-l-4 border-l-green-400
+            {% elif item.status == 'WARNING' %}border-l-4 border-l-amber-400
+            {% else %}border-l-4 border-l-red-400{% endif %}">
 
-  <div class="flex items-start gap-2 mb-1">
-    {% if item.status == 'PASS' %}
-      <span class="text-xs mt-0.5 shrink-0">✅</span>
+  <!-- Card body -->
+  <div class="px-3 py-3 flex items-start gap-2">
+    {% if addressed %}
+      <span class="shrink-0 text-sm mt-0.5">✅</span>
+    {% elif item.status == 'PASS' %}
+      <span class="shrink-0 text-sm mt-0.5">✅</span>
     {% elif item.status == 'WARNING' %}
-      <span class="text-xs mt-0.5 shrink-0">⚠️</span>
+      <span class="shrink-0 text-sm mt-0.5">⚠️</span>
     {% else %}
-      <span class="text-xs mt-0.5 shrink-0">❌</span>
+      <span class="shrink-0 text-sm mt-0.5">❌</span>
     {% endif %}
-    <p class="text-xs text-gray-700 leading-snug">{{ item.description }}</p>
+    <p class="text-sm text-gray-800 leading-relaxed">{{ item.description }}</p>
   </div>
 
   {% if item.status != 'PASS' %}
-    {% if item.pm_response and not edit_mode %}
-      <div class="ml-5 flex items-center gap-1">
-        <p class="text-xs text-primary-700 italic flex-1">✓ {{ item.pm_response }}</p>
+  <!-- Response footer -->
+  <div class="px-3 py-2 {% if addressed %}bg-green-50 border-t border-green-100{% else %}bg-gray-50 border-t border-gray-100{% endif %}">
+    {% if addressed and not edit_mode %}
+      <div class="flex items-center gap-2">
+        <p class="text-xs text-green-700 italic flex-1">✓ {{ item.pm_response }}</p>
         <button hx-get="{% url 'reviews:item_respond' exhibit.pk item.pk %}?edit=1"
                 hx-target="#review-item-{{ item.pk }}"
                 hx-swap="outerHTML"
-                class="text-xs text-gray-400 hover:text-gray-600 shrink-0">edit</button>
+                title="Edit response"
+                class="text-gray-300 hover:text-gray-500 transition-colors shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+          </svg>
+        </button>
       </div>
     {% else %}
       <form hx-post="{% url 'reviews:item_respond' exhibit.pk item.pk %}"
             hx-target="#review-item-{{ item.pk }}"
             hx-swap="outerHTML"
-            class="ml-5 flex gap-1 mt-1">
+            class="flex gap-1">
         {% csrf_token %}
         <input type="text"
                name="pm_response"
                value="{{ item.pm_response }}"
-               placeholder="Add a note..."
-               class="flex-1 text-xs text-gray-600 placeholder-gray-300 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-300">
+               placeholder="Add a response…"
+               autofocus
+               class="flex-1 text-xs text-gray-600 placeholder-gray-300 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-300 bg-white">
         <button type="submit"
-                class="text-xs text-primary-600 hover:text-primary-800 whitespace-nowrap px-1">
+                class="text-xs font-medium text-primary-600 hover:text-primary-800 whitespace-nowrap px-1 transition-colors">
           Save
         </button>
       </form>
     {% endif %}
+  </div>
   {% endif %}
 
 </div>
+{% endwith %}

@@ -412,6 +412,8 @@ Track progress phase by phase. Check items off as completed.
 - [x] Conversation history managed client-side: `window.chatHistory` array; `htmx:configRequest` injects it before each POST; `htmx:afterSwap` reads updated history from `data-history` attribute *(2026-03-13)*
 - [x] `section_list` GET view + URL (`<int:pk>/sections/`): refreshes section list after chat overlay closes *(2026-03-13)*
 - [x] JS: `openChatOverlay()` (loads overlay once via HTMX, re-shows if already loaded); `closeChatOverlay()` (hides overlay, refreshes section list) *(2026-03-13)*
+- [x] Split-screen chat panel: aside expands to 45vw; `openChatPanel()` / `closeChatPanel()`; `chat_side_panel.html` with quick-actions (collapsible, includes `ai_panel.html`) + chat messages + input; AI tab removed; `updateAIPanel()` removed *(2026-03-15)*
+- [x] Context chip picker in chat input: `+` button opens picker with sections + open notes; chips render as dismissible pills (blue=section, amber=note); selected context injected as `[Context: ...]` prefix in `ai_chat_send`; Open Questions + Sections removed from `ai_panel.html`; 3 new tests *(2026-03-15)*
 - [x] `HX-Trigger: pendingChanged` fired when changes are applied; section list refreshed on overlay close *(2026-03-13)*
 - [x] 14 tests: overlay load, send with add/edit changes, history threading, AI failure, empty message, company isolation — all passing *(2026-03-13)*
 

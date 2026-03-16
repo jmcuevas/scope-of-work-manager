@@ -22,8 +22,8 @@
       <!-- Items grouped by check type -->
       {% regroup items by check_type as by_type %}
       {% for group in by_type %}
-        <div class="mb-3">
-          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+        <div class="mb-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
             {% if group.grouper == 'OPEN_NOTE' %}Open Notes
             {% elif group.grouper == 'CROSS_TRADE' %}Cross-Trade Notes
             {% elif group.grouper == 'CUSTOM_CHECKLIST' %}Checklist
