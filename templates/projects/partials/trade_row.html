@@ -1,4 +1,4 @@
-{% load trade_tags %}
+{% load trade_tags humanize %}
 <tr class="hover:bg-gray-50 transition-colors" id="trade-{{ trade.pk }}">
 
   <!-- Trade -->
@@ -11,7 +11,7 @@
 
   <!-- Budget -->
   <td class="px-5 py-3 text-right text-gray-600">
-    {% if trade.budget %}${{ trade.budget|floatformat:0 }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+    {% if trade.budget %}${{ trade.budget|floatformat:0|intcomma }}{% else %}<span class="text-gray-300">—</span>{% endif %}
   </td>
 
   <!-- Status dropdown (HTMX) -->
