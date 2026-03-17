@@ -797,7 +797,7 @@ def exhibit_check_completeness(request, pk):
         error = str(e)
         suggestions = []
     ctx = _ai_panel_context(exhibit, suggestions=suggestions, error=error)
-    return render(request, 'exhibits/partials/ai_panel.html', ctx)
+    return render(request, 'exhibits/partials/completeness_results.html', ctx)
 
 
 @login_required
