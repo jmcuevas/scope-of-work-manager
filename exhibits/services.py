@@ -1,3 +1,5 @@
+import re
+
 from django.db import transaction
 from .models import ScopeExhibit, ExhibitSection, ScopeItem
 
@@ -325,3 +327,126 @@ def clone_exhibit(source_exhibit, trade, user):
         ScopeItem.objects.bulk_update(items_to_update, ['parent'])
 
     return new_exhibit
+
+
+# ---------------------------------------------------------------------------
+# Multi-line paste support
+# ---------------------------------------------------------------------------
+
+# Dotted numeric: "1.", "1.1", "1.1.1", "2.3.1." etc.
+_RE_DOTTED = re.compile(r'^(\d+(?:\.\d+)*)\.\s+(.*)')
+# Dotted numeric without trailing dot: "1.1 text" (level from dot count)
+_RE_DOTTED_NO_TRAIL = re.compile(r'^(\d+(?:\.\d+)+)\s+(.*)')
+# Single number with dot: "1. text"
+_RE_SINGLE_NUM = re.compile(r'^\d+\.\s+(.*)')
+# Lettered: "A.", "a)", "(a)", "A)" etc.
+_RE_LETTER = re.compile(r'^(?:\(?[A-Za-z]\)|[A-Za-z][\.\)])\s+(.*)')
+# Bullet: starts with -, *, or bullet char after optional whitespace
+_RE_BULLET = re.compile(r'^[\-\*\u2022]\s+(.*)')
+
+
+def parse_pasted_items(raw_text):
+    """Parse pasted text into a list of {'text': ..., 'level': ...} dicts.
+
+    Detects hierarchy from numbering prefixes or indentation.
+    Pure function — no database access.
+    """
+    text = raw_text.replace('\r\n', '\n').replace('\r', '\n')
+    lines = [line for line in text.split('\n') if line.strip()]
+
+    if not lines:
+        return []
+
+    if len(lines) == 1:
+        return [{'text': lines[0].strip(), 'level': 0}]
+
+    parsed = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # 1) Dotted numeric with trailing dot: "1.1. text" → level = dot-count - 1
+        m = _RE_DOTTED.match(stripped)
+        if m:
+            level = m.group(1).count('.')
+            parsed.append({'text': m.group(2).strip(), 'level': level})
+            continue
+
+        # 2) Dotted numeric without trailing dot: "1.1 text"
+        m = _RE_DOTTED_NO_TRAIL.match(stripped)
+        if m:
+            level = m.group(1).count('.')
+            parsed.append({'text': m.group(2).strip(), 'level': level})
+            continue
+
+        # 3) Single number: "1. text" → level 0
+        m = _RE_SINGLE_NUM.match(stripped)
+        if m:
+            parsed.append({'text': m.group(1).strip(), 'level': 0})
+            continue
+
+        # 4) Lettered: "A.", "a)", "(a)" → level 0
+        m = _RE_LETTER.match(stripped)
+        if m:
+            parsed.append({'text': m.group(1).strip(), 'level': 0})
+            continue
+
+        # 5) Bullet with indentation
+        leading = len(line) - len(line.lstrip())
+        # Expand tabs to 4 spaces for indent calculation
+        leading_expanded = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip())
+        m = _RE_BULLET.match(stripped)
+        if m:
+            indent_level = leading_expanded // 2 if leading_expanded else 0
+            parsed.append({'text': m.group(1).strip(), 'level': indent_level})
+            continue
+
+        # 6) Plain indentation
+        if leading_expanded > 0:
+            indent_level = leading_expanded // 2
+            parsed.append({'text': stripped, 'level': indent_level})
+            continue
+
+        # 7) No prefix, no indent → level 0
+        parsed.append({'text': stripped, 'level': 0})
+
+    # Clamp level jumps: max +1 from previous, cap at 3
+    prev_level = 0
+    for item in parsed:
+        item['level'] = min(item['level'], prev_level + 1, 3)
+        prev_level = item['level']
+
+    return parsed
+
+
+@transaction.atomic
+def bulk_add_items(section, parsed_items, user):
+    """Create ScopeItems from parsed paste data with correct parent/level/order.
+
+    Items are appended after existing items in the section.
+    All items are created with is_pending_review=True.
+    """
+    last = section.items.order_by('-order').values_list('order', flat=True).first()
+    next_order = (last + 1) if last is not None else 0
+
+    parent_at_level = {}
+    created = []
+    for i, item_data in enumerate(parsed_items):
+        text = item_data['text']
+        level = item_data['level']
+        parent = parent_at_level.get(level - 1) if level > 0 else None
+
+        item = ScopeItem.objects.create(
+            section=section,
+            text=text,
+            level=level,
+            parent=parent,
+            order=next_order + i,
+            is_pending_review=True,
+            created_by=user,
+        )
+        parent_at_level[level] = item
+        created.append(item)
+
+    return created

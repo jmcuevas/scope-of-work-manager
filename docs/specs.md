@@ -813,19 +813,38 @@ The AI is surfaced through three entry points in the scope editor, all using the
 - All generated items created as `is_pending_review=True` for batch review
 - Completeness check first: if exhibit already has substantial content matching the description, AI acknowledges it rather than generating duplicates
 
-#### 2. Right Pane AI Tab (new — contextual quick actions)
-- Third tab in the editor right panel alongside "Notes" and "Final Review"
-- Content is context-sensitive based on what's selected/focused in the editor:
-  - **No selection**: "Generate more items for [section]" per-section actions; "Check exhibit completeness" button
-  - **Item selected/focused**: "Rewrite this item" (with optional instruction field), "Expand into sub-items"
-  - **Note linked**: "Convert this note to a scope item" (uses note text as input to `generate_scope_item`)
-- Results preview inline in the AI tab before being queued as pending
-- HTMX pattern: `hx-post` → server calls Claude → returns pending item(s) inserted into editor + AI tab updated
+#### 2. Chat Side Panel (contextual quick actions + conversation)
+- Slides in from the right side of the editor; toggled via "Chat with AI ✨" button in the editor header
+- Layout (top to bottom): header, Quick Actions bar, chat messages area, input area
+- **Quick Actions bar** (`#ai-quick-panel`): slim horizontal bar below the header, context-sensitive:
+  - **No selection**: "Check exhibit completeness" button
+  - **Item selected/focused**: "Rewrite this item" (with optional instruction field), "Expand into sub-items", "← Back to AI panel"
+- **Chat messages area** (`#chat-messages`): scrollable message history with user/assistant bubbles
+  - PM can have a multi-turn conversation: "Add a section about coordination with the electrical contractor", "The project has a raised floor — update the scope to reflect that"
+  - Each AI response may propose changes (new items, edits, deletions) queued as pending
+  - Completeness check results also render here as an assistant-style bubble (see below)
+- **Input area**: textarea with context chip picker (attach sections/notes as context), Send button
+- Chat history is session-only (not persisted to DB)
+- HTMX patterns:
+  - Chat send: `hx-post` with conversation history → server calls Claude → returns assistant message + applies pending changes → appends to `#chat-messages`
+  - Rewrite/Expand: `hx-post` → server calls Claude → returns updated item partial + resets Quick Actions panel
 
-#### 3. Full-Screen Chat Overlay (new — exhibit-level conversation)
-- "Chat with AI ✨" button in the editor header
-- Opens a full-screen overlay with a conversational interface (message history + input)
-- PM can have a multi-turn conversation: "Add a section about coordination with the electrical contractor", "The project has a raised floor — update the scope to reflect that"
+#### Completeness Check UX
+- Button lives in the Quick Actions bar (visible when no item is selected)
+- Results render as a chat message bubble appended to `#chat-messages` (not inline in Quick Actions)
+  - `hx-target="#chat-messages"` + `hx-swap="beforeend scroll:#chat-messages:bottom"`
+- This ensures results are scrollable (chat area has `overflow-y-auto`) and feel like a natural part of the conversation flow
+- Each gap card (amber background) shows the suggested text, reason, and two actions:
+  - **"+ Add to {section}"**: `hx-post` → creates a pending `ScopeItem` → card text replaced with "✓ Added to {section}"
+  - **"✕ Dismiss"**: client-side removal, card text replaced with "Dismissed" (no backend call)
+- Both actions replace the card content in-place — other gap cards remain visible and actionable
+- If no gaps found: green "Scope looks complete" message
+- If AI fails: red error text
+
+#### 3. Full-Screen Chat Overlay (exhibit-level conversation)
+- "Chat with AI ✨" button in the editor header opens a full-screen overlay
+- Same conversational interface as the side panel but with more screen space (centered, max-width container)
+- PM can have a multi-turn conversation with full chat history
 - Each AI response may propose changes (new items, edits, deletions) queued as pending
 - PM exits the overlay by closing it; pending changes remain in the editor for review
 - Chat history is session-only (not persisted to DB)
@@ -892,6 +911,9 @@ The UI is server-rendered HTML with HTMX for dynamic behavior — no JavaScript 
 | AI: per-section item generation | `hx-post` → calls Claude API → creates item with `is_pending_review=True` → returns section item list + pending banner |
 | AI: rewrite item | `hx-post` → calls Claude API → sets `is_pending_review=True`, `pending_original_text`, updates `text` → returns updated item partial (diff view) + pending banner |
 | AI: expand item into sub-items | `hx-post` → calls Claude API → creates child items with `is_pending_review=True` → returns section item list + pending banner |
+| AI: completeness check | `hx-post` → calls Claude API → returns chat-bubble partial appended to `#chat-messages` with gap cards (accept/dismiss per card, client-side) |
+| AI: add gap item | `hx-post` → creates pending `ScopeItem` in target section → returns section item list; fires `HX-Trigger: pendingChanged`; card replaced with "✓ Added" in-place |
+| AI: chat send (side panel) | `hx-post` with conversation history → calls Claude API → applies proposed changes as pending → returns chat response appended to `#chat-messages` + pending banner |
 | AI: chat overlay | `hx-post` with conversation history → calls Claude API → applies proposed changes as pending → returns chat response + section list + pending banner |
 | AI: accept pending item | `hx-post` → clears pending fields → returns normal item partial; fires `HX-Trigger: pendingChanged` |
 | AI: reject pending item | `hx-post` → restores original or deletes item → returns item partial or empty; fires `HX-Trigger: pendingChanged` |

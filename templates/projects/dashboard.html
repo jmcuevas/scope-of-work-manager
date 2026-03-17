@@ -50,12 +50,12 @@
     </div>
     <div class="flex items-center gap-2">
       {% if open_question_count %}
-      <a href="{% url 'notes:open_questions' project.pk %}"
+      <a href="{% url 'notes:open_notes' project.pk %}"
          class="flex items-center gap-1.5 px-3 py-2 bg-yellow-50 hover:bg-yellow-100 border border-yellow-200 text-yellow-800 text-sm font-medium rounded-lg transition-colors">
         <span class="inline-flex items-center justify-center w-5 h-5 text-xs font-bold bg-yellow-400 text-white rounded-full">
           {{ open_question_count }}
         </span>
-        Open Questions
+        Open Notes
       </a>
       {% endif %}
       <a href="{% url 'projects:trade_add' project.pk %}"

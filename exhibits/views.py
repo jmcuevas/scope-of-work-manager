@@ -289,11 +289,22 @@ def item_add(request, pk, section_pk):
     text = request.POST.get('text', '').strip()
     if not text:
         return _item_list_response(request, exhibit, section)
+
+    from .services import parse_pasted_items, bulk_add_items
+    parsed = parse_pasted_items(text)
+
+    if len(parsed) > 1:
+        bulk_add_items(section, parsed, request.user)
+        response = _item_list_response(request, exhibit, section)
+        response['HX-Trigger'] = 'pendingChanged'
+        return response
+
+    # Single item — current behavior (no pending review)
     last = section.items.order_by('-order').values_list('order', flat=True).first()
     last_order = last if last is not None else -1
     ScopeItem.objects.create(
         section=section,
-        text=text,
+        text=parsed[0]['text'] if parsed else text,
         level=0,
         parent=None,
         order=last_order + 1,
@@ -786,7 +797,7 @@ def exhibit_check_completeness(request, pk):
         error = str(e)
         suggestions = []
     ctx = _ai_panel_context(exhibit, suggestions=suggestions, error=error)
-    return render(request, 'exhibits/partials/ai_panel.html', ctx)
+    return render(request, 'exhibits/partials/completeness_results.html', ctx)
 
 
 @login_required

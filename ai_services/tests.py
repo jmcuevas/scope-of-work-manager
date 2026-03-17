@@ -218,6 +218,65 @@ class TestGenerateScopeFromDescription:
             with pytest.raises(AIServiceError):
                 generate_scope_from_description(exhibit)
 
+    def test_sparse_exhibit_uses_generate_prompt(self):
+        """Exhibits with fewer than GAP_FILL_THRESHOLD items use full-generate mode."""
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        # Only 2 items — below threshold
+        ScopeItemFactory(section=section, text='Item one')
+        ScopeItemFactory(section=section, text='Item two')
+
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(self._valid_response())
+            generate_scope_from_description(exhibit)
+
+        prompt_sent = mock_client.return_value.messages.create.call_args[1]['messages'][0]['content']
+        assert 'Generate scope items' in prompt_sent
+        assert 'MISSING' not in prompt_sent
+
+    def test_populated_exhibit_uses_gap_fill_prompt(self):
+        """Exhibits with >= GAP_FILL_THRESHOLD items switch to gap-fill mode."""
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        # Create 6 items — above threshold
+        for i in range(6):
+            ScopeItemFactory(section=section, text=f'Item {i}')
+
+        gap_response = json.dumps({
+            'scope_items': [{
+                'section_name': 'Scope of Work',
+                'items': [{'text': 'Provide seismic bracing for all ductwork.', 'level': 0}],
+            }]
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(gap_response)
+            result = generate_scope_from_description(exhibit)
+
+        prompt_sent = mock_client.return_value.messages.create.call_args[1]['messages'][0]['content']
+        assert 'MISSING' in prompt_sent
+        assert 'Generate scope items' not in prompt_sent
+        # Same return format as full-generate mode
+        assert result is not None
+        assert 'scope_items' in result
+
+    def test_populated_exhibit_with_no_gaps_returns_empty_scope_items(self):
+        """Gap-fill mode returns valid dict even when Claude finds no gaps."""
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        for i in range(6):
+            ScopeItemFactory(section=section, text=f'Item {i}')
+
+        empty_response = json.dumps({'scope_items': []})
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(empty_response)
+            result = generate_scope_from_description(exhibit)
+
+        assert result is not None
+        assert result['scope_items'] == []
+
 
 # ---------------------------------------------------------------------------
 # generate_scope_item
