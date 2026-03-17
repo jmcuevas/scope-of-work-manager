@@ -13,12 +13,11 @@ PROJECT_TYPES = [
 
 CSI_TRADES = [
     # Division 01 - General Requirements
-    ('011000', 'Summary of Work'),
-    ('015000', 'Temporary Facilities and Controls'),
+    ('016120', 'Building Cleaning'),
 
     # Division 02 - Existing Conditions
+    ('022100', 'Survey'),
     ('024100', 'Demolition'),
-    ('024200', 'Removal and Salvage of Construction Materials'),
 
     # Division 03 - Concrete
     ('033000', 'Cast-in-Place Concrete'),
@@ -35,76 +34,67 @@ CSI_TRADES = [
     ('064000', 'Architectural Woodwork'),
 
     # Division 07 - Thermal and Moisture Protection
-    ('071000', 'Waterproofing'),
+    ('071000', 'Dampproofing and Waterproofing'),
     ('075000', 'Membrane Roofing'),
-    ('079000', 'Joint Sealants'),
+    ('078100', 'Applied Fireproofing'),
+    ('079200', 'Joint Sealants'),
 
     # Division 08 - Openings
-    ('081100', 'Metal Doors and Frames'),
-    ('083200', 'Sliding Aluminum-Framed Glass Doors'),
-    ('084000', 'Entrances, Storefronts, and Curtain Walls'),
-    ('084100', 'Entrances and Storefronts'),
-    ('084400', 'Curtain Wall and Glazing'),
-    ('087100', 'Door Hardware'),
-    ('088000', 'Glazing'),
+    ('081000', 'Doors and Frames'),
+    ('084400', 'Storefront and Curtain Wall'),
+    ('088000', 'Interior Glazing'),
+    ('088700', 'Glazing Surface Films'),
 
     # Division 09 - Finishes
-    ('092100', 'Plaster and Gypsum Board'),
-    ('092900', 'Gypsum Board / Drywall'),
+    ('092900', 'Gypsum Board Assemblies'),
     ('093000', 'Tiling'),
+    ('095000', 'Ceilings'),
     ('095100', 'Acoustical Ceilings'),
-    ('096500', 'Resilient Flooring'),
-    ('096800', 'Carpet'),
-    ('097000', 'Wall Coverings'),
-    ('099000', 'Paints and Coatings'),
+    ('096000', 'Flooring'),
+    ('096700', 'High Performance Coatings'),
+    ('099000', 'Painting and Coating'),
 
     # Division 10 - Specialties
     ('101400', 'Signage'),
-    ('102800', 'Toilet, Bath, and Laundry Accessories'),
-    ('104400', 'Fire Protection Specialties'),
+    ('102000', 'Interior Specialties'),
 
     # Division 11 - Equipment
     ('111300', 'Loading Dock Equipment'),
+    ('114000', 'Foodservice Equipment'),
 
     # Division 12 - Furnishings
-    ('122100', 'Window Blinds'),
-    ('123600', 'Countertops'),
+    ('122000', 'Window Treatments'),
+    ('125000', 'Furniture'),
 
     # Division 14 - Conveying Equipment
     ('142000', 'Elevators'),
-    ('144000', 'Lifts'),
 
     # Division 21 - Fire Suppression
-    ('210000', 'Fire Suppression'),
-    ('211300', 'Fire Sprinkler'),
+    ('211000', 'Fire Protection'),
 
     # Division 22 - Plumbing
-    ('220000', 'Plumbing'),
-    ('224000', 'Plumbing Fixtures'),
+    ('221000', 'Plumbing Systems'),
 
     # Division 23 - HVAC
-    ('230000', 'HVAC'),
-    ('239000', 'BMS / Controls'),
+    ('231000', 'HVAC Systems'),
 
     # Division 26 - Electrical
-    ('260000', 'Electrical'),
+    ('261000', 'Electrical Systems'),
 
     # Division 27 - Communications
-    ('270000', 'Communications'),
-    ('271000', 'Structured Cabling / Data & Voice'),
-    ('274000', 'Audio-Visual'),
+    ('271000', 'Structured Cabling'),
+    ('274000', 'Audio-Visual Systems'),
 
     # Division 28 - Electronic Safety and Security
-    ('280000', 'Security Systems'),
+    ('281000', 'Security Systems'),
 
     # Division 31 - Earthwork
     ('312000', 'Earthwork and Grading'),
-    ('314000', 'Shoring and Underpinning'),
 
     # Division 32 - Exterior Improvements
     ('321200', 'Asphalt Paving'),
     ('321300', 'Concrete Paving'),
-    ('329000', 'Planting / Landscaping'),
+    ('329000', 'Landscaping and Irrigation'),
 
     # Division 33 - Utilities
     ('330000', 'Site Utilities'),

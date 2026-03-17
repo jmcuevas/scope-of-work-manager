@@ -14,6 +14,10 @@ from .prompts import (
     SCOPE_ITEM_SYSTEM_PROMPT,
 )
 
+# Exhibits with this many items or more switch to gap-fill mode
+# instead of full scope generation.
+GAP_FILL_THRESHOLD = 5
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -133,8 +137,13 @@ def _build_existing_scope_context(exhibit):
 
 def generate_scope_from_description(exhibit):
     """
-    Generate a full set of scope items for an exhibit based on its
-    scope description, trade, and project context.
+    Generate scope items for an exhibit based on its scope description,
+    trade, and project context.
+
+    Behaviour adapts based on existing content:
+    - Sparse exhibit (< GAP_FILL_THRESHOLD items): generates a full scope draft.
+    - Populated exhibit (>= GAP_FILL_THRESHOLD items): identifies gaps and
+      suggests only the missing items.
 
     Returns a dict:
         {"scope_items": [{"section_name": "...", "items": [{"text": "...", "level": 0}]}]}
@@ -151,8 +160,23 @@ def generate_scope_from_description(exhibit):
     section_names = list(exhibit.sections.order_by('order').values_list('name', flat=True))
     existing_scope = _build_existing_scope_context(exhibit)
 
+    # Count existing items to decide mode
+    from exhibits.models import ScopeItem
+    item_count = ScopeItem.objects.filter(section__scope_exhibit=exhibit).count()
+
+    if item_count >= GAP_FILL_THRESHOLD:
+        instruction = (
+            "Review the existing scope below and identify important items "
+            "that are MISSING. Only suggest items that fill genuine gaps — "
+            "do NOT duplicate or rephrase existing items."
+        )
+        existing_label = "EXISTING SCOPE (do not duplicate — only suggest what is missing)"
+    else:
+        instruction = "Generate scope items for the following exhibit."
+        existing_label = "EXISTING SCOPE (do not duplicate these items)"
+
     user_prompt = f"""
-Generate scope items for the following exhibit.
+{instruction}
 
 TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
 PROJECT TYPE: {project.project_type if project and project.project_type else 'Not specified'}
@@ -162,7 +186,7 @@ SCOPE DESCRIPTION: {exhibit.scope_description or 'Not provided'}
 AVAILABLE SECTIONS (use only these names):
 {chr(10).join(f'- {name}' for name in section_names)}
 
-EXISTING SCOPE (do not duplicate these items):
+{existing_label}:
 {existing_scope}
 """.strip()
 

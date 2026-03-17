@@ -367,7 +367,7 @@ Track progress phase by phase. Check items off as completed.
 ### Step 4: Update Existing AI to Use Pending Review
 - [x] Update `exhibit_generate_scope` view: bulk-created items now have `is_pending_review=True`; response fires `HX-Trigger: pendingChanged`; success message updated to indicate review is needed *(2026-03-13)*
 - [x] Update `item_generate` view: AI-generated items now have `is_pending_review=True` and `original_input` stored; fallback (raw input) items remain non-pending; `HX-Trigger: pendingChanged` only fired on AI success *(2026-03-13)*
-- [ ] Update `generate_scope_from_description()` service: add completeness check — if exhibit has substantial content, include existing items in prompt context and ask Claude to check for gaps rather than regenerate everything
+- [x] Update `generate_scope_from_description()` service: add completeness check — if exhibit has substantial content (≥5 items), switch user prompt to gap-fill mode asking Claude to identify missing items rather than regenerate everything; 3 new tests *(2026-03-16)*
 
 ### Step 5: New AI Service Functions
 - [x] Add `REWRITE_ITEM`, `EXPAND_ITEM`, `CHAT` choices to `AIRequestLog.RequestType`; migration `ai_services/0002_add_request_type_choices.py` *(2026-03-13)*
