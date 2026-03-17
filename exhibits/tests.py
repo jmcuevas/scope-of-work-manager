@@ -13,12 +13,14 @@ from .models import ExhibitSection, ScopeExhibit, ScopeItem
 from .services import (
     accept_ai_item,
     accept_all_pending,
+    bulk_add_items,
     clone_exhibit,
     compute_section_numbering,
     create_blank_exhibit,
     flatten_section_items,
     indent_item,
     outdent_item,
+    parse_pasted_items,
     reject_ai_item,
     reject_all_pending,
     save_as_template,
@@ -1452,3 +1454,185 @@ class TestAIChatSendView:
             client.post(url, {'message': 'Hello', 'history': '[]'})
         conversation = mock_chat.call_args[0][1]
         assert conversation[0]['content'] == 'Hello'
+
+
+# ---------------------------------------------------------------------------
+# Service: parse_pasted_items (pure function, no DB)
+# ---------------------------------------------------------------------------
+
+class TestParsePastedItems:
+    def test_single_line(self):
+        result = parse_pasted_items('Provide all ductwork')
+        assert result == [{'text': 'Provide all ductwork', 'level': 0}]
+
+    def test_empty_string(self):
+        assert parse_pasted_items('') == []
+
+    def test_whitespace_only(self):
+        assert parse_pasted_items('   \n  \n  ') == []
+
+    def test_crlf_normalization(self):
+        result = parse_pasted_items('Item A\r\nItem B\r\n')
+        assert len(result) == 2
+        assert result[0]['text'] == 'Item A'
+        assert result[1]['text'] == 'Item B'
+
+    def test_blank_lines_skipped(self):
+        result = parse_pasted_items('Item A\n\n\nItem B')
+        assert len(result) == 2
+
+    def test_dotted_numeric_hierarchy(self):
+        text = '1. Foundation work\n1.1. Excavation\n1.1.1. Trenching\n2. Framing'
+        result = parse_pasted_items(text)
+        assert result[0] == {'text': 'Foundation work', 'level': 0}
+        assert result[1] == {'text': 'Excavation', 'level': 1}
+        assert result[2] == {'text': 'Trenching', 'level': 2}
+        assert result[3] == {'text': 'Framing', 'level': 0}
+
+    def test_dotted_numeric_no_trailing_dot(self):
+        text = '1. Foundation\n1.1 Excavation\n1.1.1 Trenching'
+        result = parse_pasted_items(text)
+        assert result[0] == {'text': 'Foundation', 'level': 0}
+        assert result[1] == {'text': 'Excavation', 'level': 1}
+        assert result[2] == {'text': 'Trenching', 'level': 2}
+
+    def test_bullets_with_indentation(self):
+        text = '- Top level\n  - Indented once\n    - Indented twice'
+        result = parse_pasted_items(text)
+        assert result[0] == {'text': 'Top level', 'level': 0}
+        assert result[1] == {'text': 'Indented once', 'level': 1}
+        assert result[2] == {'text': 'Indented twice', 'level': 2}
+
+    def test_tabs_for_indentation(self):
+        text = '- Top level\n\t- Tab indented\n\t\t- Double tab'
+        result = parse_pasted_items(text)
+        assert result[0]['level'] == 0
+        assert result[1]['level'] == 1
+        assert result[2]['level'] == 2
+
+    def test_plain_indentation(self):
+        text = 'Top level\n  Indented\n    More indented'
+        result = parse_pasted_items(text)
+        assert result[0]['level'] == 0
+        assert result[1]['level'] == 1
+        assert result[2]['level'] == 2
+
+    def test_lettered_prefixes(self):
+        text = 'A. First item\nb) Second item\n(c) Third item'
+        result = parse_pasted_items(text)
+        assert result[0] == {'text': 'First item', 'level': 0}
+        assert result[1] == {'text': 'Second item', 'level': 0}
+        assert result[2] == {'text': 'Third item', 'level': 0}
+
+    def test_level_jump_clamped(self):
+        """Level can only increase by 1 at a time."""
+        text = '1. Top\n1.1.1.1. Jump three levels'
+        result = parse_pasted_items(text)
+        assert result[0]['level'] == 0
+        assert result[1]['level'] == 1  # clamped from 3
+
+    def test_level_capped_at_3(self):
+        text = '- A\n  - B\n    - C\n      - D\n        - E'
+        result = parse_pasted_items(text)
+        assert result[4]['level'] == 3  # capped at 3
+
+    def test_prefix_stripping(self):
+        text = '1. Provide ductwork\n1.1. Install insulation\nA. Clean up'
+        result = parse_pasted_items(text)
+        assert result[0]['text'] == 'Provide ductwork'
+        assert result[1]['text'] == 'Install insulation'
+        assert result[2]['text'] == 'Clean up'
+
+    def test_bullet_chars(self):
+        text = '* Star bullet\n\u2022 Unicode bullet\n- Dash bullet'
+        result = parse_pasted_items(text)
+        assert len(result) == 3
+        assert result[0]['text'] == 'Star bullet'
+        assert result[1]['text'] == 'Unicode bullet'
+        assert result[2]['text'] == 'Dash bullet'
+
+
+# ---------------------------------------------------------------------------
+# Service: bulk_add_items (DB)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBulkAddItems:
+    def test_correct_parent_fks(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        parsed = [
+            {'text': 'Parent', 'level': 0},
+            {'text': 'Child', 'level': 1},
+            {'text': 'Grandchild', 'level': 2},
+        ]
+        items = bulk_add_items(section, parsed, user)
+        assert items[0].parent is None
+        assert items[1].parent == items[0]
+        assert items[2].parent == items[1]
+
+    def test_appends_after_existing_items(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        ScopeItemFactory(section=section, order=0)
+        ScopeItemFactory(section=section, order=1)
+        parsed = [{'text': 'New item', 'level': 0}]
+        items = bulk_add_items(section, parsed, user)
+        assert items[0].order == 2
+
+    def test_levels_stored_correctly(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        parsed = [
+            {'text': 'A', 'level': 0},
+            {'text': 'B', 'level': 1},
+            {'text': 'C', 'level': 0},
+        ]
+        items = bulk_add_items(section, parsed, user)
+        assert [i.level for i in items] == [0, 1, 0]
+        assert all(i.is_pending_review for i in items)
+
+
+# ---------------------------------------------------------------------------
+# View: multi-line paste via item_add
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestItemAddMultiLine:
+    def test_multi_line_paste_creates_correct_items(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        url = reverse('exhibits:item_add', args=[exhibit.pk, section.pk])
+        text = '1. Provide ductwork\n1.1. Install insulation\n2. Clean up'
+        response = client.post(url, {'text': text})
+        assert section.items.count() == 3
+        items = list(section.items.order_by('order'))
+        assert items[0].text == 'Provide ductwork'
+        assert items[0].level == 0
+        assert items[1].text == 'Install insulation'
+        assert items[1].level == 1
+        assert items[1].parent == items[0]
+        assert items[2].text == 'Clean up'
+        assert items[2].level == 0
+        assert all(i.is_pending_review for i in items)
+        assert response['HX-Trigger'] == 'pendingChanged'
+
+    def test_single_line_preserves_existing_behavior(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        # Add an existing item first
+        ScopeItemFactory(section=section, order=0)
+        url = reverse('exhibits:item_add', args=[exhibit.pk, section.pk])
+        client.post(url, {'text': 'Single item'})
+        assert section.items.count() == 2
+        new_item = section.items.order_by('-order').first()
+        assert new_item.text == 'Single item'
+        assert new_item.level == 0
+        assert not new_item.is_pending_review

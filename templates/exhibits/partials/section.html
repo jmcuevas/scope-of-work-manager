@@ -106,14 +106,17 @@
     <form hx-post="{% url 'exhibits:item_add' exhibit.pk section.pk %}"
           hx-target="#items-{{ section.pk }}"
           hx-swap="innerHTML"
-          hx-on:htmx:after-request="this.reset()"
-          class="flex items-center gap-2">
-      <input type="text"
-             name="text"
-             placeholder="Add item..."
-             class="flex-1 text-sm text-gray-700 placeholder-gray-300 border-0 focus:outline-none focus:ring-0 py-1 bg-transparent">
+          hx-on:htmx:after-request="this.reset(); autoGrow(this.querySelector('textarea'))"
+          class="flex items-start gap-2">
+      <textarea name="text"
+                rows="1"
+                placeholder="Add item... (paste multiple lines to bulk-add)"
+                oninput="autoGrow(this)"
+                onpaste="handleRichPaste(event)"
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!this.value.includes('\n')){event.preventDefault();this.closest('form').requestSubmit()}"
+                class="flex-1 text-sm text-gray-700 placeholder-gray-300 border-0 focus:outline-none focus:ring-0 py-1 bg-transparent resize-none overflow-hidden"></textarea>
       <button type="submit"
-              class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors whitespace-nowrap">
+              class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors whitespace-nowrap mt-1">
         + Add
       </button>
     </form>

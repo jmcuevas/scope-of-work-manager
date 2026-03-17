@@ -219,6 +219,105 @@
 
 {% block extra_js %}{{ block.super }}
 <script>
+  function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }
+
+  /* ---- Rich paste: read HTML from clipboard to preserve list hierarchy ---- */
+
+  function handleRichPaste(event) {
+    var html = event.clipboardData && event.clipboardData.getData('text/html');
+    if (!html) return; // No HTML — let plain text paste happen
+
+    var lines = extractLinesFromHtml(html);
+    if (lines.length < 2 || !lines.some(function(l) { return l.level > 0; })) return;
+
+    // We detected hierarchy — format as indented bullets for the backend parser
+    event.preventDefault();
+    var text = lines.map(function(l) {
+      return '  '.repeat(l.level) + '- ' + l.text;
+    }).join('\n');
+    event.target.value = text;
+    autoGrow(event.target);
+  }
+
+  function extractLinesFromHtml(html) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var lines = [];
+
+    // Strategy 1: List items (<li> elements)
+    var lis = tmp.querySelectorAll('li');
+    if (lis.length > 0) {
+      lis.forEach(function(li) {
+        var text = getDirectText(li).trim();
+        if (!text) return;
+
+        // Nesting depth: count ancestor <ol>/<ul> elements
+        var depth = 0;
+        var el = li.parentElement;
+        while (el && el !== tmp) {
+          var t = el.tagName.toLowerCase();
+          if (t === 'ol' || t === 'ul') depth++;
+          el = el.parentElement;
+        }
+        var level = Math.max(0, depth - 1);
+
+        // Flat Google Docs lists use margin-left instead of nesting
+        var ml = parseIndentPt(li);
+        if (ml > 0 && level === 0) {
+          level = Math.round(ml / 36);
+        }
+
+        lines.push({text: text, level: level});
+      });
+      return lines;
+    }
+
+    // Strategy 2: Block elements with margin-left (indented paragraphs)
+    var blocks = tmp.querySelectorAll('p, h1, h2, h3, h4, h5, h6');
+    blocks.forEach(function(block) {
+      var text = block.textContent.trim();
+      if (!text) return;
+      var ml = parseIndentPt(block);
+      var level = ml > 0 ? Math.round(ml / 36) : 0;
+      lines.push({text: text, level: level});
+    });
+
+    return lines;
+  }
+
+  function getDirectText(li) {
+    // Get text content of <li> excluding nested <ul>/<ol> text
+    var parts = [];
+    li.childNodes.forEach(function(child) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        parts.push(child.textContent);
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        var tag = child.tagName.toLowerCase();
+        if (tag !== 'ul' && tag !== 'ol') {
+          parts.push(child.textContent);
+        }
+      }
+    });
+    return parts.join(' ');
+  }
+
+  function parseIndentPt(el) {
+    // Extract margin-left or padding-left in pt from inline style
+    var style = el.getAttribute('style') || '';
+    var m = style.match(/margin-left:\s*([\d.]+)\s*pt/i);
+    if (m) return parseFloat(m[1]);
+    m = style.match(/padding-left:\s*([\d.]+)\s*pt/i);
+    if (m) return parseFloat(m[1]);
+    m = style.match(/margin-left:\s*([\d.]+)\s*px/i);
+    if (m) return parseFloat(m[1]) * 0.75;
+    m = style.match(/padding-left:\s*([\d.]+)\s*px/i);
+    if (m) return parseFloat(m[1]) * 0.75;
+    return 0;
+  }
+
   var EXHIBIT_AI_PANEL_URL = "{% url 'exhibits:ai_panel' exhibit.pk %}";
   var EXHIBIT_AI_CHAT_URL = "{% url 'exhibits:ai_chat' exhibit.pk %}";
   var EXHIBIT_SECTION_LIST_URL = "{% url 'exhibits:section_list' exhibit.pk %}";
