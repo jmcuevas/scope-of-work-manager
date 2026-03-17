@@ -1,6 +1,6 @@
 from django.contrib.auth.decorators import login_required
 from django.db import models
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from exhibits.models import ScopeExhibit
@@ -169,19 +169,43 @@ def note_edit(request, pk):
 
 @login_required
 def open_questions(request, project_pk):
+    from django.db.models import Q
     project = get_object_or_404(Project, pk=project_pk, company=request.user.company)
-    notes = (
+    trades = project.trades.select_related('csi_trade').order_by('csi_trade__csi_code')
+
+    qs = (
         Note.objects
-        .filter(
-            project=project,
-            note_type=Note.NoteType.OPEN_QUESTION,
-            status=Note.Status.OPEN,
-        )
+        .filter(project=project, status=Note.Status.OPEN)
         .select_related('primary_trade__csi_trade', 'created_by')
         .prefetch_related('related_trades__csi_trade')
-        .order_by('created_at')
+        .order_by('-created_at')
     )
+
+    selected_trade_pks = request.GET.getlist('trade')
+    if selected_trade_pks:
+        qs = qs.filter(
+            Q(primary_trade__pk__in=selected_trade_pks) | Q(related_trades__pk__in=selected_trade_pks)
+        ).distinct()
+
+    form = NoteForm(project=project)
     return render(request, 'notes/open_questions.html', {
         'project': project,
-        'notes': notes,
+        'notes': qs,
+        'trades': trades,
+        'selected_trade_pks': selected_trade_pks,
+        'form': form,
     })
+
+
+@login_required
+@require_POST
+def note_add_project(request, project_pk):
+    project = get_object_or_404(Project, pk=project_pk, company=request.user.company)
+    form = NoteForm(request.POST, project=project)
+    if form.is_valid():
+        note = form.save(commit=False)
+        note.project = project
+        note.created_by = request.user
+        note.save()
+        form.save_m2m()
+    return redirect('notes:open_notes', project_pk=project.pk)

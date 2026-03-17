@@ -13,6 +13,7 @@ urlpatterns = [
     path('notes/<int:pk>/resolve/', views.note_resolve, name='note_resolve'),
     path('notes/<int:pk>/edit/', views.note_edit, name='note_edit'),
 
-    # Project-level open questions
-    path('projects/<int:project_pk>/open-questions/', views.open_questions, name='open_questions'),
+    # Project-level open notes
+    path('projects/<int:project_pk>/open-notes/', views.open_questions, name='open_notes'),
+    path('projects/<int:project_pk>/open-notes/add/', views.note_add_project, name='note_add_project'),
 ]

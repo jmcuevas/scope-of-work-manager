@@ -146,7 +146,6 @@ def project_dashboard(request, pk):
 
     open_question_count = Note.objects.filter(
         project=project,
-        note_type=Note.NoteType.OPEN_QUESTION,
         status=Note.Status.OPEN,
     ).count()
 

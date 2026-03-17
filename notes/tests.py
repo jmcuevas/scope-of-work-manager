@@ -262,7 +262,7 @@ def test_note_resolve_dismiss_returns_empty(client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.django_db
-def test_open_questions_view_only_shows_open_questions(client):
+def test_open_notes_view_shows_all_open_notes_regardless_of_type(client):
     user = PMUserFactory()
     project, trades = _make_project_with_trades(user)
 
@@ -274,19 +274,19 @@ def test_open_questions_view_only_shows_open_questions(client):
         project=project, primary_trade=trades[0], created_by=user,
         note_type=Note.NoteType.SCOPE_CLARIFICATION, status=Note.Status.OPEN,
     )
-    resolved_oq = NoteFactory(
+    resolved = NoteFactory(
         project=project, primary_trade=trades[0], created_by=user,
         note_type=Note.NoteType.OPEN_QUESTION, status=Note.Status.RESOLVED,
     )
 
     _login(client, user)
-    url = reverse('notes:open_questions', kwargs={'project_pk': project.pk})
+    url = reverse('notes:open_notes', kwargs={'project_pk': project.pk})
     response = client.get(url)
 
     assert response.status_code == 200
     assert oq.text.encode() in response.content
-    assert clarification.text.encode() not in response.content
-    assert resolved_oq.text.encode() not in response.content
+    assert clarification.text.encode() in response.content  # now included
+    assert resolved.text.encode() not in response.content   # resolved still excluded
 
 
 @pytest.mark.django_db
@@ -295,7 +295,7 @@ def test_open_questions_company_isolation(client):
     other_project = ProjectFactory()
     _login(client, user)
 
-    url = reverse('notes:open_questions', kwargs={'project_pk': other_project.pk})
+    url = reverse('notes:open_notes', kwargs={'project_pk': other_project.pk})
     response = client.get(url)
 
     assert response.status_code == 404
@@ -306,12 +306,12 @@ def test_open_questions_company_isolation(client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.django_db
-def test_dashboard_shows_open_question_badge(client):
+def test_dashboard_shows_open_notes_badge(client):
     user = PMUserFactory()
     project, trades = _make_project_with_trades(user)
     NoteFactory(
         project=project, primary_trade=trades[0], created_by=user,
-        note_type=Note.NoteType.OPEN_QUESTION, status=Note.Status.OPEN,
+        note_type=Note.NoteType.SCOPE_CLARIFICATION, status=Note.Status.OPEN,
     )
     _login(client, user)
 
@@ -319,7 +319,7 @@ def test_dashboard_shows_open_question_badge(client):
     response = client.get(url)
 
     assert response.status_code == 200
-    assert b'Open Questions' in response.content
+    assert b'Open Notes' in response.content
 
 
 @pytest.mark.django_db
@@ -381,7 +381,7 @@ def test_note_resolve_requires_login(client):
 @pytest.mark.django_db
 def test_open_questions_requires_login(client):
     project = ProjectFactory()
-    url = reverse('notes:open_questions', kwargs={'project_pk': project.pk})
+    url = reverse('notes:open_notes', kwargs={'project_pk': project.pk})
     response = client.get(url)
     assert response.status_code == 302
     assert '/accounts/' in response['Location']
