@@ -9,7 +9,7 @@
      style="padding-left: {{ item.level|add:1 }}rem; padding-right: 1rem;">
   <div class="flex-1">
     {% if item_number %}
-      <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ item_number }}</span>
+      <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ item_number }}.</span>
     {% endif %}
     {% if item.pending_original_text %}
       <p class="text-sm text-red-400 line-through leading-relaxed mb-0.5">{{ item.pending_original_text }}</p>
@@ -47,7 +47,7 @@
      hx-swap="outerHTML"
      title="Click to edit">
     {% if item_number %}
-      <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ item_number }}</span>
+      <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ item_number }}.</span>
     {% endif %}
     {{ item.text }}
   </p>

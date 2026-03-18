@@ -5,17 +5,17 @@
   <title>Exhibit A &mdash; {{ exhibit.csi_trade.name }}</title>
   <style>
     /* ------------------------------------------------------------------ */
-    /* Page setup                                                           */
+    /* Page setup                                                          */
     /* ------------------------------------------------------------------ */
     @page {
       size: letter;
-      margin: 1in 1in 0.85in 1in;
+      margin: 1.8in 1in 0.85in 1in;
 
       @bottom-center {
         content: "Page " counter(page) " of " counter(pages);
-        font-family: Arial, Helvetica, sans-serif;
+        font-family: 'Times New Roman', Times, serif;
         font-size: 8pt;
-        color: #666;
+        color: #333;
       }
     }
 
@@ -29,108 +29,113 @@
     }
 
     body {
-      font-family: Arial, Helvetica, sans-serif;
+      font-family: 'Times New Roman', Times, serif;
       font-size: 10pt;
-      color: #1a1a1a;
+      color: #000;
       line-height: 1.45;
+      text-align: justify;
     }
 
     /* ------------------------------------------------------------------ */
-    /* Document header                                                      */
+    /* Running header (repeats on every page)                               */
     /* ------------------------------------------------------------------ */
-    .doc-header {
-      border-bottom: 2px solid #1a1a1a;
-      padding-bottom: 10pt;
-      margin-bottom: 16pt;
-    }
-
-    .doc-title {
-      font-size: 16pt;
-      font-weight: bold;
-      letter-spacing: 0.02em;
-      margin-bottom: 4pt;
-    }
-
-    .doc-trade {
-      font-size: 12pt;
-      font-weight: bold;
-      margin-bottom: 6pt;
-    }
-
-    .doc-meta {
+    .running-header {
+      position: fixed;
+      top: -0.8in;
+      left: 0;
+      right: 0;
+      padding-bottom: 6pt;
+      border-bottom: 1pt solid #000;
       font-size: 9pt;
-      color: #444;
-      display: flex;
-      gap: 16pt;
+      line-height: 1.35;
     }
 
-    .doc-meta span {
-      display: inline-block;
+    .running-header-table {
+      width: 100%;
+      border-collapse: collapse;
     }
+
+    .running-header-left {
+      font-weight: bold;
+      font-size: 10pt;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .running-header-right {
+      text-align: right;
+      vertical-align: top;
+    }
+
+
 
     /* ------------------------------------------------------------------ */
-    /* Scope description                                                    */
+    /* Title block (first page only, centered)                             */
     /* ------------------------------------------------------------------ */
-    .scope-description {
-      margin-bottom: 16pt;
-      padding: 8pt 10pt;
-      border-left: 3pt solid #555;
-      background: #f7f7f7;
-      page-break-inside: avoid;
+    .title-block {
+      text-align: center;
+      margin: 16pt 0 20pt 0;
     }
 
-    .scope-description-label {
-      font-size: 8pt;
+    .title-block hr {
+      border: none;
+      border-top: 1pt solid #000;
+      margin: 8pt 0;
+    }
+
+    .title-main {
+      font-size: 15pt;
+      font-weight: bold;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .title-trade {
+      font-size: 15pt;
       font-weight: bold;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #555;
-      margin-bottom: 4pt;
-    }
-
-    .scope-description-text {
-      font-size: 9.5pt;
-      color: #333;
-      font-style: italic;
+      margin-top: 2pt;
     }
 
     /* ------------------------------------------------------------------ */
-    /* Sections                                                             */
+    /* Intro paragraph                                                     */
+    /* ------------------------------------------------------------------ */
+    .intro-paragraph {
+      margin-bottom: 16pt;
+      text-align: justify;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Sections                                                            */
     /* ------------------------------------------------------------------ */
     .section {
-      margin-bottom: 14pt;
-      page-break-inside: avoid;
+      margin-bottom: 12pt;
     }
 
     .section-header {
-      font-size: 11pt;
+      font-size: 10pt;
       font-weight: bold;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      border-top: 1pt solid #1a1a1a;
-      border-bottom: 1pt solid #ccc;
-      padding: 4pt 0;
+      text-decoration: underline;
       margin-bottom: 4pt;
+      padding-top: 4pt;
     }
 
     /* ------------------------------------------------------------------ */
-    /* Items                                                                */
+    /* Items                                                               */
     /* ------------------------------------------------------------------ */
     .item {
       display: flex;
       align-items: baseline;
-      gap: 6pt;
+      gap: 3pt;
       padding: 2pt 0;
       line-height: 1.4;
+      margin-left: 16pt;
     }
 
     .item-number {
-      font-size: 9pt;
-      color: #555;
-      font-family: 'Courier New', Courier, monospace;
+      font-size: 10pt;
       white-space: nowrap;
       flex-shrink: 0;
-      min-width: 32pt;
     }
 
     .item-text {
@@ -138,43 +143,61 @@
       flex: 1;
     }
 
-    /* Level indentation — applied via inline style from template */
+    /* ------------------------------------------------------------------ */
+    /* End-of-document marker                                              */
+    /* ------------------------------------------------------------------ */
+    .end-marker {
+      text-align: center;
+      font-weight: bold;
+      margin-top: 24pt;
+      padding-top: 12pt;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Document header -->
-  <div class="doc-header">
-    <div class="doc-title">Exhibit A &mdash; Scope of Work</div>
-    <div class="doc-trade">
-      {{ exhibit.csi_trade.csi_code }} &mdash; {{ exhibit.csi_trade.name }}
-    </div>
-    <div class="doc-meta">
-      {% if exhibit.project %}
-        <span><strong>Project:</strong> {{ exhibit.project.name }}{% if exhibit.project.number %} ({{ exhibit.project.number }}){% endif %}</span>
-      {% endif %}
-      <span><strong>Company:</strong> {{ exhibit.company.name }}</span>
-      <span><strong>Date:</strong> {{ export_date|date:"F j, Y" }}</span>
-      <span><strong>Status:</strong> {{ exhibit.get_status_display }}</span>
-    </div>
+  <!-- Running header (placed on every page via @page @top-center) -->
+  <div class="running-header">
+    <table class="running-header-table">
+      <tr>
+        <td class="running-header-left">{{ exhibit.company.name }}</td>
+        <td class="running-header-right">
+          {{ export_date|date:"F j, Y" }}<br>
+          {% if exhibit.project %}{{ exhibit.project.name }}<br>{% endif %}
+          {% if exhibit.project.address %}{{ exhibit.project.address }}<br>{% endif %}
+          Exhibit A &mdash; Scope of Work
+        </td>
+      </tr>
+    </table>
   </div>
 
-  <!-- Scope description (only if set) -->
-  {% if exhibit.scope_description %}
-  <div class="scope-description">
-    <div class="scope-description-label">Scope Description</div>
-    <div class="scope-description-text">{{ exhibit.scope_description }}</div>
+  <!-- Centered title block -->
+  <div class="title-block">
+    <div class="title-main">Exhibit A &mdash; Specific Bid Instructions</div>
+    <div class="title-trade">{{ exhibit.csi_trade.csi_code }} {{ exhibit.csi_trade.name }}</div>
+    <hr>
   </div>
+
+  <!-- Intro paragraph -->
+  {% if exhibit.project %}
+  <p class="intro-paragraph">
+    Bidder's proposals shall be for all the work as described by the Contract Documents, including the
+    <strong>{{ exhibit.company.name }}</strong> Scope of Work for
+    <strong>{{ exhibit.project.name }}</strong> &mdash;
+    <strong>{{ exhibit.csi_trade.name }}</strong>
+    dated <strong>{{ export_date|date:"F j, Y" }}</strong>,
+    with additional clarifications as outlined below:
+  </p>
   {% endif %}
 
   <!-- Sections -->
   {% for entry in sections_data %}
   <div class="section">
-    <div class="section-header">{{ entry.section.name }}</div>
+    <div class="section-header">{{ entry.section.name }}:</div>
 
     {% for item in entry.items %}
     <div class="item" style="padding-left: {{ item.level }}cm;">
-      <span class="item-number">{{ entry.numbers|get_item:item.pk }}</span>
+      <span class="item-number">{{ entry.numbers|get_item:item.pk }}.</span>
       <span class="item-text">{{ item.text }}</span>
     </div>
     {% empty %}
@@ -182,6 +205,10 @@
     {% endfor %}
   </div>
   {% endfor %}
+
+  <!-- End of document -->
+  <div class="end-marker">*** END OF DOCUMENT ***</div>
+
 
 </body>
 </html>
