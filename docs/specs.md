@@ -968,6 +968,7 @@ The following features are **not in MVP** but the architecture is designed to su
   - **Flag missing scope**: compare scope description against the current exhibit and surface gaps (e.g., "You mentioned BMS integration but no scope item addresses controls coordination")
 - Implementation: additional Claude API calls that take the scope description + project description + current exhibit state and return suggestions. Displayed as a sidebar or inline suggestions the PM can accept/dismiss.
 - No data model changes needed — suggestions are transient (generated on demand, not stored)
+- See also: `## AI Architecture Roadmap` for the expanded AI capabilities plan (Phases 2 and 4)
 
 **5. Project Membership & Invitations**
 - MVP: all users in a company can see all projects (no access restrictions)
@@ -1000,6 +1001,78 @@ The following features are **not in MVP** but the architecture is designed to su
 - `Trade.spec_section`: text (nullable) — reference to the relevant spec section number (e.g., "23 21 13"). Useful when AI spec reading is added in V2 to link trades to their spec sections.
 - `Trade.bid_due_date`: date (nullable) — when bids are due for this trade. Enables dashboard sorting/filtering by urgency. Currently tracked in BuildingConnected, so this would be a convenience duplicate.
 - `Project.status`: ACTIVE | COMPLETED | ARCHIVED — allows archiving old projects so they don't clutter the dashboard. Archived projects remain searchable for template reuse but don't appear in the active project list.
+
+---
+
+## AI Architecture Roadmap
+
+Path from the current AI-assisted workflow to a fully agentic architecture. See `### AI Service Layer` and `### AI Assistant UX` for what exists today. Phases are independently deliverable; each step will get a detailed implementation plan before coding begins.
+
+### Phase 1: Foundation
+
+Architectural prerequisites. Immediate priority.
+
+- [ ] **1.1 Server-Side Chat History & AI Memory** — Replace client-side `window.chatHistory` with `ChatSession` + `ChatMessage` models. Conversations persist across page reloads, can be resumed, and carry context between sessions.
+- [ ] **1.2 Structured Context Injection** — Replace plain-text `_build_existing_scope_context()` with structured JSON (items with PKs, hierarchy, metadata, notes). Enables Claude to reference specific items by ID (required for tool use) and reduces token waste.
+- [ ] **1.3 Claude Tool Use Migration** — Refactor from JSON-output-parsing to Claude's native tool use API. Define read tools (`get_exhibit_structure`, `get_notes`, etc.), write tools (`add_scope_item`, `edit_scope_item`, `delete_scope_item`, `indent_item`, etc.), and note tools (`add_note`, `resolve_note`). All writes produce pending items. Migrate `chat_with_exhibit()` first, then other functions incrementally.
+
+### Phase 2: New AI Capabilities
+
+New AI-powered workflows. Each is standalone, though several benefit from Phase 1.
+
+- [ ] **2.1 Cross-Trade Gap/Overlap Detection** — Analyze scopes across all trades in a project to find work not assigned to any trade and same work in multiple trades. Project-level "Cross-Trade Analysis" view accessible from the buyout dashboard. Findings convertible to Notes or ScopeItems. (Original product vision Stage 4.)
+- [ ] **2.2 Bulk Section Rewrite** — Rewrite all items in a section at once with a custom instruction (e.g., "convert to subcontract language", "add drawing references"). All rewrites go through pending review. With tool use (1.3), becomes a tool Claude can call from chat.
+- [ ] **2.3 Smart Template Ranking** — AI-ranked template recommendations in the template picker based on scope description, project type, and template content rather than simple project-type match + date sort.
+- [ ] **2.4 Spec PDF Reading & Comparison** — Upload project spec PDFs, extract relevant trade sections, compare against current exhibit to flag deviations in both directions. Large standalone feature. (Original product vision Stage 2.)
+- [ ] **2.5 Accept/Reject Feedback Loop** — Track accept/reject signals per AI-generated item with metadata (service function, prompt version, user). Surface acceptance rate analytics. Feed curated accepted examples back into prompts as few-shot examples.
+
+### Phase 3: UX & Performance
+
+Independent of each other, can be tackled in any order.
+
+- [ ] **3.1 Streaming Responses** — Stream chat and full scope generation responses token-by-token via SSE instead of waiting for the full response (5-15s currently).
+- [ ] **3.2 Timeout & Differentiated Error Messages** — Explicit API timeout (45s). Differentiate rate-limited, context-too-long, timeout, and unavailable errors in user-facing messages. (See also: Deployment Readiness Backlog Tier 1.)
+- [ ] **3.3 Cost Visibility Dashboard** — Admin view showing AI usage metrics from `AIRequestLog`: requests, tokens, estimated cost, grouped by time/user/type. Optional per-user soft limits.
+- [ ] **3.4 AI Result Caching** — Hash-based caching of read-only AI results (completeness check, single-item generation) with TTL and invalidation on exhibit writes.
+
+### Phase 4: Prompt & Output Quality
+
+Prompt engineering — no major architectural changes.
+
+- [ ] **4.1 Few-Shot Examples in Prompts** — Add 2-3 concrete input/output examples to each of the 6 system prompts. Highest quality improvement for lowest effort.
+- [ ] **4.2 Company-Configurable Language Rules** — `scope_language_rules` TextField on Company model, injected into prompts alongside the hardcoded `_LANGUAGE_RULES`. Admin-editable settings page.
+- [ ] **4.3 Project-Type-Specific Prompt Context** — Domain knowledge per ProjectType (e.g., lab TI → fume hoods, BMS integration; seismic retrofit → shear walls, structural steel). Injected into all AI function prompts.
+
+### Phase 5: Agent Architecture (Future)
+
+All require Phase 1 as a prerequisite.
+
+- [ ] **5.1 Multi-Step Autonomous Scope Building** — Agent loop where Claude calls tools in sequence with human checkpoints at key decision points. PM can redirect, correct, or stop at any checkpoint.
+- [ ] **5.2 Context Window Management** — Token counting, summarization of older messages, exhibit context compression for large exhibits. Sliding window with summary.
+- [ ] **5.3 Tool Use Safety Layer** — Per-turn limits on items created/modified/deleted, confirmation for destructive actions, rate limiting on tool calls per session, audit logging. (See also: Deployment Readiness Backlog Tier 1 for HTTP-level rate limiting.)
+- [ ] **5.4 Tool Result Formatting** — Standardized result format (`{success, data, summary}`) with actionable error guidance and compact representations for large result sets.
+- [ ] **5.5 Enhanced Observability** — `AIToolCallLog` model tracking individual tool calls within a request. Dashboard for tool call frequency, failure rate, and trace views.
+
+### Dependency Map
+
+```
+Phase 1 (Foundation) — all three are independent, can be built in parallel
+Phase 2: 2.1 benefits from 1.2 + 1.3; 2.5 needs prompt versioning; rest independent
+Phase 3: 3.1 interacts with 1.3; rest independent, can start immediately
+Phase 4: all independent, can start immediately
+Phase 5: all require Phase 1 complete (5.1 needs all three; 5.2 needs 1.1; 5.3-5.5 need 1.3)
+```
+
+### Additional Considerations
+
+Design decisions spanning multiple phases — to be resolved during detailed planning:
+
+- **Tool use + pending review interaction** — Write tools create pending items, but read tools should return both live and pending items so Claude sees its own proposals
+- **Tool authentication** — Tool dispatcher needs a context object (user, company, exhibit) to enforce company isolation on every call
+- **Migration path** — Add `response_mode` to `_call_claude()` (`"json"` vs `"tools"`) to migrate functions one at a time
+- **Chat session cleanup** — Retention policy for accumulated sessions (auto-archive, max per exhibit)
+- **Prompt versioning** — Track which prompt version produced which output (essential for feedback loop in 2.5)
+- **Tool idempotency** — Write tools must handle retries safely (timeout doesn't mean the tool didn't execute)
 
 ---
 
@@ -1227,6 +1300,51 @@ Everything else (notes, AI, final review) makes that loop better but isn't requi
 
 **Key milestone**: End of Phase 4 (Week 5) — you have a working tool that replaces the Word template workflow. Everything after that makes it better.
 
+
+## Deployment Readiness Backlog
+
+Items needed to go from "all features built" to "production-ready for internal users (~100 people)." Organized by deployment priority. These are distinct from [Post-MVP Architecture Notes](#post-mvp-architecture-notes), which cover future feature work.
+
+### Tier 1: Deployment Blockers
+
+Must-fix before any real users touch the app.
+
+- [ ] **Production security headers** — Configure `SECURE_SSL_REDIRECT`, `SECURE_HSTS_SECONDS`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_REFERRER_POLICY`. Currently none are set.
+- [ ] **SECRET_KEY / DEBUG hardening** — `SECRET_KEY` falls back to a hardcoded dev key; `DEBUG` defaults to `True`. Both should fail loudly if env vars are missing in production instead of silently using unsafe defaults.
+- [ ] **Environment variable validation** — App should refuse to start if required env vars are missing (`SECRET_KEY`, `DATABASE_URL`, `ALLOWED_HOSTS`). A startup check in `settings.py` or `AppConfig.ready()`.
+- [ ] **Custom 404/500 error pages** — Currently shows Django's default pages, which look broken and unprofessional. Create branded templates.
+- [ ] **Password reset email** — Console-only email backend. With 100 users, password reset must work. Configure a real email backend (SendGrid, SES, or SMTP).
+- [ ] **Rate limiting on AI endpoints** — Claude API calls are expensive and slow. No throttling exists. A single user (or bot) could rack up a massive bill. Add per-user rate limits on `/chat/send/`, `/generate-scope/`, `/item-rewrite/`, `/item-expand/`, `/check-completeness/`. Consider `django-ratelimit`. (See also: `## AI Architecture Roadmap` Phase 5.3 for tool-call-level guardrails.)
+- [ ] **Claude API timeout** — No explicit timeout on API calls. A hung request blocks the user indefinitely. Set a reasonable timeout (30-60s) and handle it gracefully. (See also: `## AI Architecture Roadmap` Phase 3.2 for the full error handling scope.)
+- [ ] **Seed production data** — Management command for initial company, admin user, real trade templates, checklist items.
+
+### Tier 2: First-Week Priorities
+
+Pain points that will surface immediately with real usage.
+
+- [ ] **Confirmation dialogs on destructive actions** — Deleting sections, items, and notes is immediate with no confirmation. One misclick = lost work. Add a JS confirm or modal before delete operations.
+- [ ] **Project list search/filter** — 100 users creating projects means the list gets unwieldy fast. Filter by name, number, status, and assigned PM at minimum.
+- [ ] **Finalized exhibit lock** — Once exhibit status is `FINALIZED`, the editor should be read-only or require an explicit "unlock" action. Currently nothing prevents edits to a finalized exhibit.
+- [ ] **Application logging** — Zero `import logging` in the codebase. No audit trail. When something goes wrong in production, there's nothing to investigate. Add loggers per app, log user actions at INFO, errors at ERROR.
+- [ ] **Loading state clarity** — AI operations take 5-10s. Verify all AI-triggered actions have clear loading indicators and that buttons are disabled during requests to prevent double-clicks.
+- [ ] **Sentry context enrichment** — Sentry catches unhandled exceptions but views don't add user/company context. Adding breadcrumbs would make debugging much faster.
+
+### Tier 3: First-Month Quality of Life
+
+Improvements that become important as usage grows.
+
+- [ ] **Pagination** — Project list, template picker, and notes lists are unpaginated. Acceptable at launch but will degrade with scale.
+- [ ] **Audit trail** — Who changed what, when. Critical for construction docs where liability matters. At minimum, `last_modified_by` + `modified_at` on `ScopeExhibit`, `ExhibitSection`, `ScopeItem`. Consider `django-simple-history` for full history (see also [Post-MVP #2: Track Changes](#post-mvp-architecture-notes)).
+- [ ] **User management UI** — Creating/deactivating users currently requires Django admin. Build a simple admin panel within the app for company admins to manage their users.
+- [ ] **Concurrent edit warning** — Two PMs opening the same exhibit simultaneously could overwrite each other's HTMX partial swaps. Show "last edited by X, Y minutes ago" and warn on stale saves.
+- [ ] **Undo / soft delete** — At minimum for scope items and sections. Construction PMs will accidentally delete things. A "recently deleted" recovery mechanism would save support headaches.
+- [ ] **Mobile/tablet responsiveness** — PMs often use iPads on job sites. The fixed sidebar layout likely doesn't work well on smaller screens.
+- [ ] **Keyboard shortcuts** — Power users editing 50+ scope items per exhibit will want Enter-to-save, Tab-to-next-item, Escape-to-cancel patterns.
+- [ ] **Health check endpoint** — Simple `/health/` that verifies DB connectivity, for uptime monitoring.
+- [ ] **Database backup strategy** — Automated PostgreSQL backups (managed hosting typically handles this, but verify and document the recovery process).
+- [ ] **Async PDF generation** — Currently synchronous and blocking. Large exhibits (10+ sections, 100+ items) could take 5-10s. Consider background task (Celery/RQ) with a download-when-ready pattern.
+
+---
 
 ## Time & Cost Estimates
 

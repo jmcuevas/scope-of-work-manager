@@ -1,5 +1,3 @@
-import json as _json
-
 from django.contrib.auth.decorators import login_required
 from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
@@ -12,7 +10,7 @@ from notes.models import Note
 from projects.models import Project, Trade
 
 from .models import ExhibitSection, ScopeExhibit, ScopeItem
-from .services import accept_ai_item, accept_all_pending, clone_exhibit, compute_section_numbering, create_blank_exhibit, flatten_section_items, indent_item, outdent_item, reject_ai_item, reject_all_pending, save_as_template
+from .services import accept_ai_item, accept_all_pending, clone_exhibit, compute_exhibit_numbering, compute_section_numbering, create_blank_exhibit, flatten_section_items, indent_item, outdent_item, reject_ai_item, reject_all_pending, save_as_template
 
 
 def _get_trade(project_pk, trade_pk, user):
@@ -119,10 +117,9 @@ def exhibit_editor(request, pk):
         return redirect('exhibits:editor', pk=exhibit.pk)
 
     sections = list(exhibit.sections.order_by('order'))
-    numbers = {}
+    numbers, section_letters = compute_exhibit_numbering(exhibit)
     items_by_section = {}
     for section in sections:
-        numbers.update(compute_section_numbering(section))
         items_by_section[section.pk] = flatten_section_items(section)
 
     # Notes sidebar context
@@ -156,6 +153,7 @@ def exhibit_editor(request, pk):
         'exhibit': exhibit,
         'sections': sections,
         'numbers': numbers,
+        'section_letters': section_letters,
         'items_by_section': items_by_section,
         'notes': notes,
         'form': note_form,
@@ -185,15 +183,15 @@ def _item_note_counts(exhibit):
 
 def _section_list_response(request, exhibit):
     sections = list(exhibit.sections.order_by('order'))
-    numbers = {}
+    numbers, section_letters = compute_exhibit_numbering(exhibit)
     items_by_section = {}
     for section in sections:
-        numbers.update(compute_section_numbering(section))
         items_by_section[section.pk] = flatten_section_items(section)
     return render(request, 'exhibits/partials/section_list.html', {
         'exhibit': exhibit,
         'sections': sections,
         'numbers': numbers,
+        'section_letters': section_letters,
         'items_by_section': items_by_section,
         'ai_enabled': settings.AI_ENABLED,
         'item_note_counts': _item_note_counts(exhibit),
@@ -263,7 +261,7 @@ def section_move(request, pk, section_pk):
 
 def _item_list_response(request, exhibit, section, edit_item_pk=None):
     items = flatten_section_items(section)
-    numbers = compute_section_numbering(section)
+    numbers, _section_letters = compute_exhibit_numbering(exhibit)
     return render(request, 'exhibits/partials/item_list.html', {
         'exhibit': exhibit,
         'section': section,
@@ -327,7 +325,7 @@ def item_edit(request, pk, section_pk, item_pk):
             return HttpResponse('')
         item.text = text
         item.save(update_fields=['text', 'updated_at'])
-        numbers = compute_section_numbering(section)
+        numbers, _sl = compute_exhibit_numbering(exhibit)
         return render(request, 'exhibits/partials/item.html', {
             'exhibit': exhibit,
             'section': section,
@@ -336,7 +334,7 @@ def item_edit(request, pk, section_pk, item_pk):
         })
 
     # GET — show edit form
-    numbers = compute_section_numbering(section)
+    numbers, _sl = compute_exhibit_numbering(exhibit)
     return render(request, 'exhibits/partials/item_form.html', {
         'exhibit': exhibit,
         'section': section,
@@ -570,7 +568,7 @@ def item_rewrite(request, pk, section_pk, item_pk):
         item.is_ai_generated = True
         item.save(update_fields=['text', 'pending_original_text', 'is_pending_review', 'is_ai_generated', 'updated_at'])
 
-    numbers = compute_section_numbering(section)
+    numbers, _sl = compute_exhibit_numbering(exhibit)
     response = render(request, 'exhibits/partials/item.html', {
         'exhibit': exhibit,
         'section': section,
@@ -947,15 +945,21 @@ def _apply_proposed_changes(exhibit, changes, user):
 @login_required
 def ai_chat(request, pk):
     exhibit = _company_exhibit_or_404(pk, request.user)
-    return render(request, 'exhibits/partials/chat_side_panel.html', _ai_panel_context(exhibit))
+    from ai_services.models import ChatSession
+    session = ChatSession.objects.filter(exhibit=exhibit).first()
+    messages = list(session.messages.order_by('created_at')) if session else []
+    ctx = _ai_panel_context(exhibit)
+    ctx['messages'] = messages
+    return render(request, 'exhibits/partials/chat_side_panel.html', ctx)
 
 
 @login_required
 @require_POST
 def ai_chat_send(request, pk):
+    from ai_services.models import ChatMessage, ChatSession
+
     exhibit = _company_exhibit_or_404(pk, request.user)
     user_message = request.POST.get('message', '').strip()
-    history_json = request.POST.get('history', '[]')
 
     if not user_message:
         from django.http import HttpResponse
@@ -974,14 +978,23 @@ def ai_chat_send(request, pk):
     if context_parts:
         user_message = '[Context: ' + '; '.join(context_parts) + ']\n\n' + user_message
 
-    try:
-        history = _json.loads(history_json)
-        if not isinstance(history, list):
-            history = []
-    except (_json.JSONDecodeError, ValueError):
-        history = []
+    # Get or create chat session for this exhibit
+    session, _ = ChatSession.objects.get_or_create(
+        exhibit=exhibit,
+        defaults={'user': request.user},
+    )
 
-    conversation = history + [{'role': 'user', 'content': user_message}]
+    # Save user message
+    ChatMessage.objects.create(
+        session=session, role=ChatMessage.Role.USER,
+        content=user_message, user=request.user,
+    )
+
+    # Build conversation from DB
+    conversation = list(
+        session.messages.order_by('created_at').values_list('role', 'content')
+    )
+    conversation = [{'role': role, 'content': content} for role, content in conversation]
 
     assistant_message = None
     changes_applied = 0
@@ -1001,12 +1014,15 @@ def ai_chat_send(request, pk):
     if not assistant_message:
         assistant_message = 'Sorry, I could not generate a response. Please try again.'
 
-    updated_history = conversation + [{'role': 'assistant', 'content': assistant_message}]
+    # Save assistant message
+    ChatMessage.objects.create(
+        session=session, role=ChatMessage.Role.ASSISTANT,
+        content=assistant_message,
+    )
 
     response = render(request, 'exhibits/partials/ai_chat_messages.html', {
         'user_message': user_message,
         'assistant_message': assistant_message,
-        'history_json': _json.dumps(updated_history),
         'changes_applied': changes_applied,
         'error': error,
     })

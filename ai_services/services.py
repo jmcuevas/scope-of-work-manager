@@ -1,8 +1,10 @@
 import json
+import re
 import time
 
 import anthropic
 from django.conf import settings
+from django.utils.html import escape as html_escape
 
 from .models import AIRequestLog
 from .prompts import (
@@ -129,6 +131,96 @@ def _build_existing_scope_context(exhibit):
             indent = '  ' * item.level
             lines.append(f'{indent}- {item.text}')
     return '\n'.join(lines) if lines else 'No items yet.'
+
+
+def _build_structured_chat_context(exhibit):
+    """
+    Build a structured dict of the exhibit's current state for chat context.
+
+    Returns a dict with trade, project, sections, items (flat with PKs),
+    and open notes for the exhibit's trade.
+    """
+    from exhibits.services import compute_exhibit_numbering, flatten_section_items
+    from notes.models import Note
+    from projects.models import Trade
+
+    # Trade info
+    trade_info = {
+        'csi_code': exhibit.csi_trade.csi_code,
+        'name': exhibit.csi_trade.name,
+    }
+
+    # Project info
+    project = exhibit.project
+    if project:
+        project_info = {
+            'name': project.name,
+            'type': str(project.project_type) if project.project_type else None,
+        }
+    else:
+        project_info = None
+
+    # Compute exhibit-level numbering (A.1, A.1.1, B.2, etc.)
+    numbers, section_letters = compute_exhibit_numbering(exhibit)
+
+    # Sections with items nested inside
+    sections = []
+    for section in exhibit.sections.order_by('order'):
+        section_dict = {'id': section.pk, 'name': section.name}
+        letter = section_letters.get(section.pk)
+        if letter:
+            section_dict['letter'] = letter
+        section_items = []
+        for item in flatten_section_items(section):
+            item_dict = {
+                'ref': numbers.get(item.pk, ''),
+                'pk': item.pk,
+                'text': item.text,
+                'level': item.level,
+            }
+            if item.parent_id:
+                item_dict['parent_pk'] = item.parent_id
+            if item.is_pending_review:
+                item_dict['is_pending_review'] = True
+            if item.is_ai_generated:
+                item_dict['is_ai_generated'] = True
+            if item.is_pending_review and item.pending_original_text:
+                item_dict['original_text'] = item.pending_original_text
+            section_items.append(item_dict)
+        section_dict['items'] = section_items
+        sections.append(section_dict)
+
+    # Notes: open notes for the exhibit's trade (primary or related)
+    notes = []
+    if project:
+        try:
+            trade = Trade.objects.get(project=project, csi_trade=exhibit.csi_trade)
+        except Trade.DoesNotExist:
+            trade = None
+        if trade:
+            from django.db.models import Q
+            open_notes = (
+                Note.objects
+                .filter(
+                    Q(primary_trade=trade) | Q(related_trades=trade),
+                    status=Note.Status.OPEN,
+                )
+                .distinct()
+            )
+            for note in open_notes:
+                notes.append({
+                    'pk': note.pk,
+                    'text': note.text[:500],
+                    'note_type': note.note_type,
+                    'status': note.status,
+                })
+
+    return {
+        'trade': trade_info,
+        'project': project_info,
+        'sections': sections,
+        'notes': notes,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +458,36 @@ What important scope items are missing from this exhibit?
     ] or []
 
 
+def _linkify_item_refs(message, ref_to_pk):
+    """
+    Replace item references (e.g. "A.1.1") in a chat message with clickable
+    HTML links that scroll to the item in the editor.
+
+    The message text is HTML-escaped first, then refs are replaced with <a> tags.
+    """
+    if not ref_to_pk:
+        return html_escape(message)
+
+    escaped = html_escape(message)
+
+    # Sort refs longest-first to avoid partial matches (A.1.1 before A.1)
+    sorted_refs = sorted(ref_to_pk.keys(), key=len, reverse=True)
+
+    for ref in sorted_refs:
+        pk = ref_to_pk[ref]
+        # Match the ref as a standalone token:
+        # - not followed by a digit (prevents B.1 matching inside B.19)
+        # - not followed by dot+digit (prevents B.1 matching inside B.1.1)
+        pattern = re.escape(ref) + r'(?!\d)(?!\.\d)'
+        link = (
+            f'<a href="#item-{pk}" onclick="scrollToItem({pk}); return false;" '
+            f'class="text-primary-600 font-medium hover:underline cursor-pointer">{ref}</a>'
+        )
+        escaped = re.sub(pattern, link, escaped)
+
+    return escaped
+
+
 def chat_with_exhibit(exhibit, conversation_history):
     """
     Multi-turn conversational AI for exhibit-level assistance.
@@ -386,31 +508,49 @@ def chat_with_exhibit(exhibit, conversation_history):
     if not settings.AI_ENABLED:
         raise AIDisabledError('AI is disabled.')
 
-    existing_scope = _build_existing_scope_context(exhibit)
-    section_names = list(exhibit.sections.order_by('order').values_list('name', flat=True))
+    context = _build_structured_chat_context(exhibit)
+    context_json = json.dumps(context)
 
     # Build the system prompt with live exhibit context injected
-    system_prompt = CHAT_SYSTEM_PROMPT + f"""
+    system_prompt = CHAT_SYSTEM_PROMPT + f"\n\nCURRENT EXHIBIT CONTEXT (JSON):\n{context_json}\n"
 
-CURRENT EXHIBIT CONTEXT:
-Trade: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
-Project: {exhibit.project.name if exhibit.project else 'Template'}
-Available sections: {', '.join(section_names)}
-
-Current scope:
-{existing_scope}
-"""
+    # Re-wrap assistant messages in JSON so Claude maintains JSON output format.
+    # DB stores the parsed plain-text message, but Claude needs to see its own
+    # JSON output pattern to stay in structured-response mode.
+    api_messages = []
+    for msg in conversation_history:
+        if msg['role'] == 'assistant':
+            api_messages.append({
+                'role': 'assistant',
+                'content': json.dumps({
+                    'message': msg['content'],
+                    'proposed_changes': [],
+                }),
+            })
+        else:
+            api_messages.append(msg)
 
     text = _call_claude(
         system_prompt=system_prompt,
-        messages=conversation_history,
+        messages=api_messages,
         exhibit=exhibit,
         request_type=AIRequestLog.RequestType.CHAT,
     )
     parsed = _parse_json_response(text)
     if parsed is None:
         return None
+
+    raw_message = parsed.get('message', '').strip()
+
+    # Build ref→pk mapping from context and linkify item references
+    ref_to_pk = {}
+    for section in context.get('sections', []):
+        for item in section.get('items', []):
+            if item.get('ref'):
+                ref_to_pk[item['ref']] = item['pk']
+    linkified_message = _linkify_item_refs(raw_message, ref_to_pk)
+
     return {
-        'message': parsed.get('message', '').strip(),
+        'message': linkified_message,
         'proposed_changes': parsed.get('proposed_changes', []),
     }

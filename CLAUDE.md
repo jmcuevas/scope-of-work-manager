@@ -16,6 +16,8 @@ Full product specification: `docs/specs.md`. This is the authoritative reference
 | HTMX interaction patterns | `### HTMX Interaction Patterns` |
 | MVP scope boundaries | `### MVP Workflow Summary` |
 | Post-MVP deferred features | `### Post-MVP Architecture Notes` |
+| Production readiness backlog | `## Deployment Readiness Backlog` |
+| AI architecture roadmap | `## AI Architecture Roadmap` |
 
 ## Commands
 

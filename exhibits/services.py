@@ -4,11 +4,13 @@ from django.db import transaction
 from .models import ScopeExhibit, ExhibitSection, ScopeItem
 
 
-def compute_section_numbering(section):
+def compute_section_numbering(section, section_letter=None):
     """
     Returns {item_pk: "1.2.3"} for all items in the section.
     Numbers are assigned by tree position: top-level items get 1, 2, 3…;
     their children get 1.1, 1.2…; grandchildren get 1.1.1, etc.
+
+    When section_letter is provided (e.g. "A"), numbers become "A.1", "A.1.1", etc.
     """
     all_items = list(section.items.order_by('order'))
 
@@ -18,6 +20,7 @@ def compute_section_numbering(section):
         children_by_parent.setdefault(item.parent_id, []).append(item)
 
     numbers = {}
+    letter_prefix = f'{section_letter}.' if section_letter else ''
 
     def assign(parent_id, prefix):
         for i, item in enumerate(children_by_parent.get(parent_id, []), start=1):
@@ -25,8 +28,23 @@ def compute_section_numbering(section):
             numbers[item.pk] = number
             assign(item.pk, f'{number}.')
 
-    assign(None, '')
+    assign(None, letter_prefix)
     return numbers
+
+
+def compute_exhibit_numbering(exhibit):
+    """
+    Returns (numbers, section_letters) where:
+    - numbers: {item_pk: "A.1.2"} across all sections
+    - section_letters: {section_pk: "A"}
+    """
+    numbers = {}
+    section_letters = {}
+    for i, section in enumerate(exhibit.sections.order_by('order')):
+        letter = chr(65 + i)  # A, B, C, ...
+        section_letters[section.pk] = letter
+        numbers.update(compute_section_numbering(section, section_letter=letter))
+    return numbers, section_letters
 
 DEFAULT_SECTIONS = [
     'General Conditions',

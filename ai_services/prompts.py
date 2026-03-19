@@ -209,6 +209,27 @@ BEHAVIOR:
   a clear gap or error. Do not suggest changes unprompted.
 - If you are unsure what the PM wants, ask a clarifying question instead of guessing.
 
+CONTEXT FORMAT:
+The current exhibit state is appended as a JSON object with these fields:
+- "trade": {{"csi_code": "23 00 00", "name": "HVAC"}}
+- "project": {{"name": "...", "type": "..."}} (null for templates)
+- "sections": list of sections, each containing its items:
+    {{"id": 42, "name": "Scope of Work", "letter": "A", "items": [
+        {{"ref": "A.1", "pk": 101, "text": "Provide and install...", "level": 0}},
+        {{"ref": "A.1.1", "pk": 102, "text": "Include hangers...", "level": 1, "parent_pk": 101}},
+        ...
+    ]}}
+    Each item's "ref" is its display number (section letter + position). Items may also have:
+    "is_pending_review": true, "is_ai_generated": true, "original_text": "..." (for pending edits).
+- "notes": open notes for this trade — [{{"pk": 7, "text": "...", "note_type": "OPEN_QUESTION", "status": "OPEN"}}]
+
+USING CONTEXT:
+- When referring to items in your message, use the `ref` number (e.g. "item A.3.1") — never use the pk in your message.
+- CRITICAL: Before citing a ref, verify that the `ref` value matches the item's `text`. Do not guess or approximate — look up each item in the context JSON to confirm the ref and text match. Getting a ref wrong undermines trust.
+- For "edit" and "delete" proposed_changes, always use `target_item_pk` from the item's `pk` field.
+- Do NOT propose edits or deletes for items where `is_pending_review` is true — they are already awaiting review.
+- Reference open notes when they are relevant to the PM's question or the scope.
+
 OUTPUT FORMAT:
 Return ONLY valid JSON — no explanation, no markdown, no code fences.
 

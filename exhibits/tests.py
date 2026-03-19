@@ -15,6 +15,7 @@ from .services import (
     accept_all_pending,
     bulk_add_items,
     clone_exhibit,
+    compute_exhibit_numbering,
     compute_section_numbering,
     create_blank_exhibit,
     flatten_section_items,
@@ -191,6 +192,60 @@ class TestComputeSectionNumbering:
         assert numbers[child1.pk] == '1.1'
         assert numbers[child2.pk] == '1.2'
         assert numbers[grandchild.pk] == '1.1.1'
+
+    def test_with_section_letter(self):
+        section = ExhibitSectionFactory()
+        parent = ScopeItemFactory(section=section, order=0)
+        child = ScopeItemFactory(section=section, parent=parent, level=1, order=0)
+        numbers = compute_section_numbering(section, section_letter='B')
+        assert numbers[parent.pk] == 'B.1'
+        assert numbers[child.pk] == 'B.1.1'
+
+    def test_section_letter_none_is_backward_compatible(self):
+        section = ExhibitSectionFactory()
+        item = ScopeItemFactory(section=section, order=0)
+        numbers = compute_section_numbering(section, section_letter=None)
+        assert numbers[item.pk] == '1'
+
+
+@pytest.mark.django_db
+class TestComputeExhibitNumbering:
+    def test_assigns_letters_to_sections(self):
+        exhibit = ScopeExhibitFactory()
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        s2 = ExhibitSectionFactory(scope_exhibit=exhibit, order=1)
+        s3 = ExhibitSectionFactory(scope_exhibit=exhibit, order=2)
+        _numbers, section_letters = compute_exhibit_numbering(exhibit)
+        assert section_letters[s1.pk] == 'A'
+        assert section_letters[s2.pk] == 'B'
+        assert section_letters[s3.pk] == 'C'
+
+    def test_items_have_letter_prefix(self):
+        exhibit = ScopeExhibitFactory()
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        s2 = ExhibitSectionFactory(scope_exhibit=exhibit, order=1)
+        item_a = ScopeItemFactory(section=s1, order=0)
+        item_b1 = ScopeItemFactory(section=s2, order=0)
+        item_b2 = ScopeItemFactory(section=s2, order=1)
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        assert numbers[item_a.pk] == 'A.1'
+        assert numbers[item_b1.pk] == 'B.1'
+        assert numbers[item_b2.pk] == 'B.2'
+
+    def test_nested_items_across_sections(self):
+        exhibit = ScopeExhibitFactory()
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        parent = ScopeItemFactory(section=s1, order=0)
+        child = ScopeItemFactory(section=s1, parent=parent, level=1, order=0)
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        assert numbers[parent.pk] == 'A.1'
+        assert numbers[child.pk] == 'A.1.1'
+
+    def test_empty_exhibit(self):
+        exhibit = ScopeExhibitFactory()
+        numbers, section_letters = compute_exhibit_numbering(exhibit)
+        assert numbers == {}
+        assert section_letters == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +1335,20 @@ class TestAIChatView:
         response = client.get(url)
         assert response.status_code == 404
 
+    def test_messages_loaded_on_chat_open(self, client):
+        from ai_services.models import ChatMessage, ChatSession
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatMessage.objects.create(session=session, role='user', content='Hello from DB')
+        ChatMessage.objects.create(session=session, role='assistant', content='Hi back from DB')
+        url = reverse('exhibits:ai_chat', args=[exhibit.pk])
+        response = client.get(url)
+        assert response.status_code == 200
+        assert b'Hello from DB' in response.content
+        assert b'Hi back from DB' in response.content
+
 
 # ---------------------------------------------------------------------------
 # AI chat send view
@@ -1300,7 +1369,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'Got it!', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Hello', 'history': '[]'})
+            response = client.post(url, {'message': 'Hello'})
         assert response.status_code == 200
         assert b'Hello' in response.content
         assert b'Got it!' in response.content
@@ -1315,7 +1384,7 @@ class TestAIChatSendView:
             ],
         }
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Add fire stopping', 'history': '[]'})
+            response = client.post(url, {'message': 'Add fire stopping'})
         assert response.status_code == 200
         item = ScopeItem.objects.get(section=section, text='Provide fire stopping.')
         assert item.is_pending_review is True
@@ -1331,7 +1400,7 @@ class TestAIChatSendView:
             ],
         }
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Add X', 'history': '[]'})
+            response = client.post(url, {'message': 'Add X'})
         assert response['HX-Trigger'] == 'pendingChanged'
 
     def test_edit_change_sets_pending_fields(self, client):
@@ -1345,7 +1414,7 @@ class TestAIChatSendView:
             ],
         }
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Edit item', 'history': '[]'})
+            response = client.post(url, {'message': 'Edit item'})
         assert response.status_code == 200
         item.refresh_from_db()
         assert item.text == 'Revised text.'
@@ -1357,7 +1426,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'No changes needed.', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'How does this look?', 'history': '[]'})
+            response = client.post(url, {'message': 'How does this look?'})
         assert response.status_code == 200
         assert 'HX-Trigger' not in response
 
@@ -1366,32 +1435,68 @@ class TestAIChatSendView:
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         with patch('exhibits.views.chat_with_exhibit', side_effect=AIServiceError('timeout')):
-            response = client.post(url, {'message': 'Hello', 'history': '[]'})
+            response = client.post(url, {'message': 'Hello'})
         assert response.status_code == 200
         assert b'timeout' in response.content
 
     def test_empty_message_returns_empty_response(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        response = client.post(url, {'message': '', 'history': '[]'})
+        response = client.post(url, {'message': ''})
         assert response.status_code == 200
         assert response.content == b''
 
     def test_history_is_passed_to_service(self, client):
+        """Prior DB messages are included in conversation sent to AI."""
+        from ai_services.models import ChatMessage, ChatSession
         user, exhibit, section = self._setup(client)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatMessage.objects.create(session=session, role='user', content='Earlier message')
+        ChatMessage.objects.create(session=session, role='assistant', content='Earlier reply')
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        prior_history = [
-            {'role': 'user', 'content': 'Earlier message'},
-            {'role': 'assistant', 'content': 'Earlier reply'},
-        ]
-        import json
         result = {'message': 'Response.', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'New message', 'history': json.dumps(prior_history)})
+            client.post(url, {'message': 'New message'})
         call_args = mock_chat.call_args[0]
         conversation = call_args[1]
         assert conversation[0]['content'] == 'Earlier message'
+        assert conversation[1]['content'] == 'Earlier reply'
         assert conversation[2]['content'] == 'New message'
+
+    def test_messages_persisted_to_db(self, client):
+        """Sending a message creates both user and assistant ChatMessage records."""
+        from ai_services.models import ChatMessage, ChatSession
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {'message': 'AI response here.', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            client.post(url, {'message': 'User says hello'})
+        session = ChatSession.objects.get(exhibit=exhibit)
+        messages = list(session.messages.order_by('created_at'))
+        assert len(messages) == 2
+        assert messages[0].role == 'user'
+        assert messages[0].content == 'User says hello'
+        assert messages[0].user == user
+        assert messages[1].role == 'assistant'
+        assert messages[1].content == 'AI response here.'
+        assert messages[1].user is None
+
+    def test_conversation_persists_across_requests(self, client):
+        """Multiple sends accumulate in DB and full history is passed to AI."""
+        from ai_services.models import ChatMessage, ChatSession
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result1 = {'message': 'Reply 1', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result1):
+            client.post(url, {'message': 'Message 1'})
+        result2 = {'message': 'Reply 2', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result2) as mock_chat:
+            client.post(url, {'message': 'Message 2'})
+        conversation = mock_chat.call_args[0][1]
+        assert len(conversation) == 3
+        assert conversation[0] == {'role': 'user', 'content': 'Message 1'}
+        assert conversation[1] == {'role': 'assistant', 'content': 'Reply 1'}
+        assert conversation[2] == {'role': 'user', 'content': 'Message 2'}
 
     def test_company_isolation(self, client):
         user_b = PMUserFactory()
@@ -1399,7 +1504,7 @@ class TestAIChatSendView:
         user_a = PMUserFactory()
         _, exhibit = _make_trade_with_exhibit(user_a)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        response = client.post(url, {'message': 'Hello', 'history': '[]'})
+        response = client.post(url, {'message': 'Hello'})
         assert response.status_code == 404
 
     def test_requires_post(self, client):
@@ -1417,7 +1522,6 @@ class TestAIChatSendView:
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
             client.post(url, {
                 'message': 'Add seismic bracing.',
-                'history': '[]',
                 'context_section_pks': [section.pk],
             })
         conversation = mock_chat.call_args[0][1]
@@ -1440,7 +1544,6 @@ class TestAIChatSendView:
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
             client.post(url, {
                 'message': 'Convert this note.',
-                'history': '[]',
                 'context_note_pks': [note.pk],
             })
         conversation = mock_chat.call_args[0][1]
@@ -1451,7 +1554,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'OK', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'Hello', 'history': '[]'})
+            client.post(url, {'message': 'Hello'})
         conversation = mock_chat.call_args[0][1]
         assert conversation[0]['content'] == 'Hello'
 

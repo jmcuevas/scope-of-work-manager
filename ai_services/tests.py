@@ -8,13 +8,17 @@ from django.urls import reverse
 from core.factories import CSITradeFactory, CompanyFactory, PMUserFactory
 from exhibits.factories import ExhibitSectionFactory, ScopeExhibitFactory, ScopeItemFactory
 from exhibits.models import ScopeItem
-from projects.factories import ProjectFactory
+from notes.factories import NoteFactory
+from notes.models import Note
+from projects.factories import ProjectFactory, TradeFactory
 
 from .models import AIRequestLog
 from .services import (
     AIDisabledError,
     AIServiceError,
+    _build_structured_chat_context,
     _call_claude,
+    _linkify_item_refs,
     _parse_json_response,
     chat_with_exhibit,
     check_exhibit_completeness,
@@ -658,7 +662,14 @@ class TestChatWithExhibit:
             chat_with_exhibit(exhibit, history)
 
         call_args = mock_client.return_value.messages.create.call_args
-        assert call_args.kwargs['messages'] == history
+        sent_messages = call_args.kwargs['messages']
+        # User messages passed through unchanged
+        assert sent_messages[0] == {'role': 'user', 'content': 'First message'}
+        assert sent_messages[2] == {'role': 'user', 'content': 'Second message'}
+        # Assistant messages re-wrapped in JSON to maintain output format
+        assert sent_messages[1]['role'] == 'assistant'
+        wrapped = json.loads(sent_messages[1]['content'])
+        assert wrapped == {'message': 'First reply', 'proposed_changes': []}
 
     def test_returns_none_on_malformed_json(self):
         user = PMUserFactory()
@@ -750,3 +761,392 @@ class TestCheckExhibitCompleteness:
         log = AIRequestLog.objects.latest('created_at')
         assert log.request_type == AIRequestLog.RequestType.COMPLETENESS_CHECK
         assert log.success is True
+
+
+# ---------------------------------------------------------------------------
+# ChatSession / ChatMessage models
+# ---------------------------------------------------------------------------
+
+from .models import ChatMessage, ChatSession
+
+
+@pytest.mark.django_db
+class TestChatSessionModel:
+    def test_create_with_exhibit_and_user(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        assert session.pk is not None
+        assert session.exhibit == exhibit
+        assert session.user == user
+        assert session.context_type == 'exhibit'
+
+    def test_ordering_by_updated_at_desc(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        s1 = ChatSession.objects.create(exhibit=exhibit, user=user)
+        s2 = ChatSession.objects.create(exhibit=exhibit, user=user)
+        # s2 created last so updated_at is later
+        sessions = list(ChatSession.objects.all())
+        assert sessions[0] == s2
+        assert sessions[1] == s1
+
+    def test_str(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        assert str(session.pk) in str(session)
+
+
+@pytest.mark.django_db
+class TestChatMessageModel:
+    def test_create_user_message(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        msg = ChatMessage.objects.create(
+            session=session, role=ChatMessage.Role.USER,
+            content='Hello', user=user,
+        )
+        assert msg.pk is not None
+        assert msg.role == 'user'
+        assert msg.content == 'Hello'
+
+    def test_create_assistant_message(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        msg = ChatMessage.objects.create(
+            session=session, role=ChatMessage.Role.ASSISTANT,
+            content='Hi there!', tokens_used=150,
+        )
+        assert msg.role == 'assistant'
+        assert msg.user is None
+        assert msg.tokens_used == 150
+
+    def test_ordering_by_created_at_asc(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        m1 = ChatMessage.objects.create(session=session, role='user', content='First')
+        m2 = ChatMessage.objects.create(session=session, role='assistant', content='Second')
+        msgs = list(session.messages.all())
+        assert msgs[0] == m1
+        assert msgs[1] == m2
+
+    def test_role_choices(self):
+        assert ChatMessage.Role.USER == 'user'
+        assert ChatMessage.Role.ASSISTANT == 'assistant'
+
+    def test_str(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        msg = ChatMessage.objects.create(session=session, role='user', content='Test message')
+        assert 'user' in str(msg)
+        assert 'Test message' in str(msg)
+
+
+# ---------------------------------------------------------------------------
+# _build_structured_chat_context
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBuildStructuredChatContext:
+
+    def _make_exhibit_with_trade(self, user):
+        """Create an exhibit with a matching Trade record (needed for notes)."""
+        exhibit = _make_exhibit(user)
+        trade = TradeFactory(
+            project=exhibit.project,
+            csi_trade=exhibit.csi_trade,
+        )
+        return exhibit, trade
+
+    def test_includes_trade_info(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        result = _build_structured_chat_context(exhibit)
+        assert result['trade']['csi_code'] == exhibit.csi_trade.csi_code
+        assert result['trade']['name'] == exhibit.csi_trade.name
+
+    def test_includes_project_info(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        result = _build_structured_chat_context(exhibit)
+        assert result['project']['name'] == exhibit.project.name
+        assert result['project']['type'] == str(exhibit.project.project_type)
+
+    def test_template_exhibit_has_null_project(self):
+        user = PMUserFactory()
+        csi = CSITradeFactory()
+        exhibit = ScopeExhibitFactory(
+            company=user.company,
+            project=None,
+            csi_trade=csi,
+            is_template=True,
+            created_by=user,
+            last_edited_by=user,
+        )
+        result = _build_structured_chat_context(exhibit)
+        assert result['project'] is None
+        assert result['notes'] == []
+
+    def test_sections_in_order(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, name='General Conditions', order=0)
+        s2 = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=1)
+        s3 = ExhibitSectionFactory(scope_exhibit=exhibit, name='Exclusions', order=2)
+        result = _build_structured_chat_context(exhibit)
+        assert [s['name'] for s in result['sections']] == [
+            'General Conditions', 'Scope of Work', 'Exclusions',
+        ]
+
+    def test_sections_have_letters(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='General Conditions', order=0)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=1)
+        result = _build_structured_chat_context(exhibit)
+        assert result['sections'][0]['letter'] == 'A'
+        assert result['sections'][1]['letter'] == 'B'
+
+    def test_items_nested_under_sections(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        item = ScopeItemFactory(section=section, text='Provide ductwork.', created_by=user)
+        result = _build_structured_chat_context(exhibit)
+        section_data = result['sections'][0]
+        assert len(section_data['items']) == 1
+        assert section_data['items'][0]['pk'] == item.pk
+        assert section_data['items'][0]['text'] == 'Provide ductwork.'
+
+    def test_items_have_ref(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        item = ScopeItemFactory(section=section, text='Provide ductwork.', order=0, created_by=user)
+        result = _build_structured_chat_context(exhibit)
+        assert result['sections'][0]['items'][0]['ref'] == 'A.1'
+
+    def test_items_preserve_hierarchy(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        parent = ScopeItemFactory(section=section, text='Provide ductwork.', level=0, created_by=user)
+        child = ScopeItemFactory(
+            section=section, text='Include hangers.', level=1,
+            parent=parent, created_by=user,
+        )
+        result = _build_structured_chat_context(exhibit)
+        items = result['sections'][0]['items']
+        assert len(items) == 2
+        child_item = next(i for i in items if i['pk'] == child.pk)
+        assert child_item['parent_pk'] == parent.pk
+        assert child_item['level'] == 1
+
+    def test_pending_item_includes_original_text(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        ScopeItemFactory(
+            section=section, text='New text.', level=0, created_by=user,
+            is_pending_review=True, is_ai_generated=True,
+            pending_original_text='Old text.',
+        )
+        result = _build_structured_chat_context(exhibit)
+        item = result['sections'][0]['items'][0]
+        assert item['is_pending_review'] is True
+        assert item['original_text'] == 'Old text.'
+
+    def test_pending_item_without_original_omits_field(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        ScopeItemFactory(
+            section=section, text='Brand new item.', level=0, created_by=user,
+            is_pending_review=True, is_ai_generated=True,
+            pending_original_text='',
+        )
+        result = _build_structured_chat_context(exhibit)
+        item = result['sections'][0]['items'][0]
+        assert item['is_pending_review'] is True
+        assert 'original_text' not in item
+
+    def test_open_notes_included(self):
+        user = PMUserFactory()
+        exhibit, trade = self._make_exhibit_with_trade(user)
+        NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Confirm insulation spec.', note_type=Note.NoteType.OPEN_QUESTION,
+            status=Note.Status.OPEN, created_by=user,
+        )
+        result = _build_structured_chat_context(exhibit)
+        assert len(result['notes']) == 1
+        assert result['notes'][0]['text'] == 'Confirm insulation spec.'
+        assert result['notes'][0]['note_type'] == 'OPEN_QUESTION'
+
+    def test_resolved_notes_excluded(self):
+        user = PMUserFactory()
+        exhibit, trade = self._make_exhibit_with_trade(user)
+        NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Already resolved.', note_type=Note.NoteType.OPEN_QUESTION,
+            status=Note.Status.RESOLVED, created_by=user,
+        )
+        result = _build_structured_chat_context(exhibit)
+        assert result['notes'] == []
+
+    def test_notes_text_truncated(self):
+        user = PMUserFactory()
+        exhibit, trade = self._make_exhibit_with_trade(user)
+        long_text = 'A' * 600
+        NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text=long_text, note_type=Note.NoteType.SCOPE_CLARIFICATION,
+            status=Note.Status.OPEN, created_by=user,
+        )
+        result = _build_structured_chat_context(exhibit)
+        assert len(result['notes'][0]['text']) == 500
+
+    def test_empty_exhibit(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        result = _build_structured_chat_context(exhibit)
+        assert result['sections'] == []
+
+
+# ---------------------------------------------------------------------------
+# TestChatWithExhibit — structured context integration tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestChatWithExhibitStructuredContext:
+
+    def test_system_prompt_contains_item_pks(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        item = ScopeItemFactory(section=section, text='Provide ductwork.', created_by=user)
+
+        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            chat_with_exhibit(exhibit, history)
+
+        call_args = mock_client.return_value.messages.create.call_args
+        system = call_args.kwargs['system']
+        assert f'"pk": {item.pk}' in system
+
+    def test_system_prompt_contains_section_ids(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+
+        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            chat_with_exhibit(exhibit, history)
+
+        call_args = mock_client.return_value.messages.create.call_args
+        system = call_args.kwargs['system']
+        assert f'"id": {section.pk}' in system
+
+    def test_system_prompt_contains_open_notes(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        trade = TradeFactory(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Confirm spec.', note_type=Note.NoteType.OPEN_QUESTION,
+            status=Note.Status.OPEN, created_by=user,
+        )
+
+        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            chat_with_exhibit(exhibit, history)
+
+        call_args = mock_client.return_value.messages.create.call_args
+        system = call_args.kwargs['system']
+        assert 'Confirm spec.' in system
+
+    def test_system_prompt_excludes_resolved_notes(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        trade = TradeFactory(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Already resolved note.', note_type=Note.NoteType.OPEN_QUESTION,
+            status=Note.Status.RESOLVED, created_by=user,
+        )
+
+        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            chat_with_exhibit(exhibit, history)
+
+        call_args = mock_client.return_value.messages.create.call_args
+        system = call_args.kwargs['system']
+        assert 'Already resolved note.' not in system
+
+
+# ---------------------------------------------------------------------------
+# _linkify_item_refs
+# ---------------------------------------------------------------------------
+
+class TestLinkifyItemRefs:
+
+    def test_replaces_ref_with_link(self):
+        ref_to_pk = {'A.1': 42}
+        result = _linkify_item_refs('See item A.1 for details.', ref_to_pk)
+        assert 'scrollToItem(42)' in result
+        assert 'A.1</a>' in result
+        assert 'href="#item-42"' in result
+
+    def test_no_refs_returns_escaped(self):
+        result = _linkify_item_refs('No refs here.', {})
+        assert result == 'No refs here.'
+
+    def test_html_escaped(self):
+        result = _linkify_item_refs('Use <b>bold</b>.', {})
+        assert '&lt;b&gt;' in result
+
+    def test_longer_ref_matched_first(self):
+        ref_to_pk = {'A.1': 10, 'A.1.1': 20}
+        result = _linkify_item_refs('Check A.1.1 and A.1.', ref_to_pk)
+        assert 'scrollToItem(20)' in result
+        assert 'scrollToItem(10)' in result
+
+    def test_does_not_partial_match_dot_digit(self):
+        """A.1 should not match inside A.1.1"""
+        ref_to_pk = {'A.1': 10}
+        result = _linkify_item_refs('See A.1.1 which is different.', ref_to_pk)
+        # A.1 should NOT be linked when followed by .1
+        assert 'scrollToItem(10)' not in result
+
+    def test_does_not_partial_match_trailing_digit(self):
+        """B.1 should not match inside B.19"""
+        ref_to_pk = {'B.1': 10}
+        result = _linkify_item_refs('See B.19 which is a different item.', ref_to_pk)
+        assert 'scrollToItem(10)' not in result
+
+    def test_b19_matched_correctly(self):
+        """B.19 should be linked, B.1 should not match inside B.19"""
+        ref_to_pk = {'B.1': 10, 'B.19': 99}
+        result = _linkify_item_refs('Check B.19 and also B.1.', ref_to_pk)
+        assert 'scrollToItem(99)' in result  # B.19 linked
+        assert 'scrollToItem(10)' in result  # B.1 linked separately
+        assert result.count('scrollToItem(99)') == 1
+        assert result.count('scrollToItem(10)') == 1
+
+    def test_multiple_occurrences(self):
+        ref_to_pk = {'B.2': 50}
+        result = _linkify_item_refs('Compare B.2 and also B.2 again.', ref_to_pk)
+        assert result.count('scrollToItem(50)') == 2

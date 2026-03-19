@@ -424,3 +424,58 @@ Track progress phase by phase. Check items off as completed.
 - [x] `item_rewrite` view tests (pending fields set correctly, mocked Claude, no-op on failure, company isolation) — 5 tests *(2026-03-13)*
 - [x] `item_expand` view tests (child items created as pending, parent FK correct, mocked Claude) — 5 tests *(2026-03-13)*
 - [x] `ai_chat_send` view tests (add/edit/delete changes, history threading, AI failure, company isolation) — 10 tests *(2026-03-13)*
+
+---
+
+## Phase 9: AI Architecture Upgrade
+**Goal**: Upgrade the AI from a stateless assistant to a persistent, tool-using system. Server-side chat memory, structured context, and Claude tool use. See `## AI Architecture Roadmap` in `docs/specs.md` for full details.
+
+### Step 1: Server-Side Chat History (Roadmap 1.1)
+
+#### Data Models
+- [x] `ChatSession` model in `ai_services/models.py`: FK exhibit (nullable), FK user, `context_type` (default `'exhibit'`), `created_at`, `updated_at` *(2026-03-17)*
+- [x] `ChatMessage` model in `ai_services/models.py`: FK session, `role` (user/assistant), `content` (TextField), FK user (nullable — null for assistant), `tokens_used` (nullable), `created_at` *(2026-03-17)*
+- [x] Register both models in `ai_services/admin.py` *(2026-03-17)*
+- [x] Generate and apply migration *(2026-03-17)*
+
+#### View & Service Changes
+- [x] Update `ai_chat_send` view: read history from DB instead of POST body; save user message and assistant response as `ChatMessage` records *(2026-03-17)*
+- [x] Update `ai_chat` view: load existing messages from DB for the exhibit's chat session; create session on first open *(2026-03-17)*
+- [x] Build conversation history for `chat_with_exhibit()` from DB records instead of client JSON *(2026-03-17)*
+
+#### Template & JS Cleanup
+- [x] Update `chat_side_panel.html`: render messages from DB on initial load instead of empty state *(2026-03-17)*
+- [x] Update `ai_chat_messages.html`: remove `data-history` attribute (no longer needed) *(2026-03-17)*
+- [x] Remove `window.chatHistory` JS array, `#chat-history-input` hidden field, `htmx:configRequest` history injection, and `htmx:afterSwap` history reading *(2026-03-17)*
+
+#### Tests
+- [x] Model tests: ChatSession/ChatMessage creation, FK relationships, ordering *(2026-03-17)*
+- [x] View tests: `ai_chat_send` persists both messages to DB, conversation loads from DB on panel open *(2026-03-17)*
+- [x] Conversation continuity: send message → reload page → open chat → previous messages visible *(2026-03-17)*
+- [x] Company isolation: cannot access another company's exhibit chat session *(2026-03-17)*
+- [x] Existing chat functionality still works end-to-end (send, receive, proposed changes applied) *(2026-03-17)*
+
+### Step 2: Structured Context Injection (Roadmap 1.2)
+
+- [x] `_build_structured_chat_context(exhibit)` function in `ai_services/services.py` *(2026-03-18)*
+- [x] Items include: pk, section_id, text, level, parent_id, is_pending_review, is_ai_generated, original_text (when pending) *(2026-03-18)*
+- [x] Notes: auto-include OPEN notes for exhibit's trade, truncated to 500 chars *(2026-03-18)*
+- [x] `chat_with_exhibit()` updated to use structured JSON context instead of plain text *(2026-03-18)*
+- [x] `CHAT_SYSTEM_PROMPT` updated: describes JSON format, instructs Claude to use PKs, skip pending items *(2026-03-18)*
+- [x] Unit tests for `_build_structured_chat_context()` (trade/project info, items with PKs, hierarchy, notes filtering) *(2026-03-18)*
+- [x] Integration tests: structured context flows through to Claude API system prompt *(2026-03-18)*
+
+### Step 3: Section Letter Numbering + Chat Item References
+
+- [x] `compute_section_numbering()` updated to accept `section_letter` param — numbers become "A.1", "A.1.1" etc. *(2026-03-18)*
+- [x] `compute_exhibit_numbering()` added: assigns A, B, C letters to sections, returns (numbers, section_letters) *(2026-03-18)*
+- [x] Editor views (`exhibit_editor`, `_section_list_response`, `_item_list_response`, `item_edit`, `item_rewrite`) updated to use exhibit-level numbering *(2026-03-18)*
+- [x] `section.html` template: shows section letter (e.g. "A.") before section name *(2026-03-18)*
+- [x] PDF export: `exports/services.py` uses `compute_exhibit_numbering()`; `exhibit_pdf.html` shows section letter before header *(2026-03-18)*
+- [x] `_build_structured_chat_context()` adds `letter` to sections and `ref` to items in context JSON *(2026-03-18)*
+- [x] `CHAT_SYSTEM_PROMPT` updated: instructs Claude to use `ref` (e.g. "item A.3.1") in messages, `target_item_pk` in proposed_changes *(2026-03-18)*
+- [x] `_linkify_item_refs()` helper: HTML-escapes message, replaces item refs with clickable `<a>` links (longest-first matching) *(2026-03-18)*
+- [x] `chat_with_exhibit()` linkifies assistant messages before returning *(2026-03-18)*
+- [x] Chat templates updated: `|safe` for assistant messages only (user messages stay escaped) *(2026-03-18)*
+- [x] `scrollToItem(pk)` JS function added to editor: smooth-scrolls to item, applies 2s highlight ring *(2026-03-18)*
+- [x] Tests: `compute_section_numbering` with letter prefix, `compute_exhibit_numbering`, `_linkify_item_refs`, structured context `ref`/`letter` — 284 tests passing *(2026-03-18)*

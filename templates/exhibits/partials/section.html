@@ -1,3 +1,4 @@
+{% load exhibit_tags %}
 <div class="bg-white rounded-lg border border-gray-200 mb-3" id="section-{{ section.pk }}">
 
   <!-- Section header -->
@@ -8,6 +9,7 @@
           hx-target="#section-list"
           hx-swap="innerHTML"
           class="flex-1 flex items-center gap-2 mr-3 min-w-0">
+      <span class="text-gray-400 font-mono text-sm font-semibold select-none">{{ section_letters|get_item:section.pk }}.</span>
       <input type="text"
              name="name"
              value="{{ section.name }}"
@@ -97,7 +99,6 @@
 
   <!-- Item list -->
   <div id="items-{{ section.pk }}" class="divide-y divide-gray-50">
-    {% load exhibit_tags %}
     {% include "exhibits/partials/item_list.html" with items=items_by_section|get_item:section.pk %}
   </div>
 

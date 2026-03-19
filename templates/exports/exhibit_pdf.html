@@ -193,7 +193,7 @@
   <!-- Sections -->
   {% for entry in sections_data %}
   <div class="section">
-    <div class="section-header">{{ entry.section.name }}:</div>
+    <div class="section-header">{{ entry.section_letter }}. {{ entry.section.name }}:</div>
 
     {% for item in entry.items %}
     <div class="item" style="padding-left: {{ item.level }}cm;">

@@ -34,6 +34,13 @@
       </p>
     </div>
   </div>
+  {% for msg in messages %}
+  <div class="flex {% if msg.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
+    <div class="max-w-[80%] {% if msg.role == 'user' %}bg-primary-600 text-white rounded-2xl rounded-br-sm{% else %}bg-gray-100 text-gray-800 rounded-2xl rounded-bl-sm{% endif %} px-4 py-3">
+      <p class="text-sm leading-relaxed whitespace-pre-wrap">{% if msg.role == 'assistant' %}{{ msg.content|safe }}{% else %}{{ msg.content }}{% endif %}</p>
+    </div>
+  </div>
+  {% endfor %}
 </div>
 
 <!-- Input area -->
@@ -45,7 +52,6 @@
         hx-indicator="#chat-send-spinner"
         hx-disabled-elt="find button[type='submit'], find textarea">
     {% csrf_token %}
-    <input type="hidden" name="history" id="chat-history-input" value="[]">
 
     <!-- Textarea -->
     <textarea id="chat-message-input"
@@ -140,20 +146,15 @@
 </div>
 
 <script>
-  if (typeof window.chatHistory === 'undefined') {
-    window.chatHistory = [];
-  }
   var selectedContext = [];
 
-  document.getElementById('chat-form').addEventListener('htmx:configRequest', function(evt) {
-    document.getElementById('chat-history-input').value = JSON.stringify(window.chatHistory);
-  });
+  // Scroll to bottom on load if there are existing messages
+  (function() {
+    var chatBox = document.getElementById('chat-messages');
+    if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+  })();
 
   document.getElementById('chat-messages').addEventListener('htmx:afterSwap', function(evt) {
-    var msgs = evt.detail.target.querySelectorAll('[data-history]');
-    if (msgs.length > 0) {
-      try { window.chatHistory = JSON.parse(msgs[msgs.length - 1].dataset.history); } catch(e) {}
-    }
     evt.detail.target.scrollTop = evt.detail.target.scrollHeight;
     var input = document.getElementById('chat-message-input');
     if (input) input.value = '';
