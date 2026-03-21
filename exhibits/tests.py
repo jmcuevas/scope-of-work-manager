@@ -26,6 +26,7 @@ from .services import (
     reject_all_pending,
     save_as_template,
 )
+from .views import _apply_proposed_changes
 
 
 # ---------------------------------------------------------------------------
@@ -1739,3 +1740,240 @@ class TestItemAddMultiLine:
         assert new_item.text == 'Single item'
         assert new_item.level == 0
         assert not new_item.is_pending_review
+
+
+# ---------------------------------------------------------------------------
+# Pending delete: services
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestPendingDeleteServices:
+
+    def _make_pending_delete(self, user, exhibit):
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(
+            section=section, text='Item to delete',
+            is_pending_review=True, pending_delete=True,
+            created_by=user,
+        )
+        return section, item
+
+    def test_accept_pending_delete_actually_deletes(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, item = self._make_pending_delete(user, exhibit)
+        pk = item.pk
+        accept_ai_item(item)
+        assert not ScopeItem.objects.filter(pk=pk).exists()
+
+    def test_accept_pending_delete_also_deletes_descendants(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        parent = ScopeItemFactory(
+            section=section, text='Parent', level=0,
+            is_pending_review=True, pending_delete=True, created_by=user,
+        )
+        child = ScopeItemFactory(
+            section=section, parent=parent, text='Child', level=1,
+            created_by=user,
+        )
+        accept_ai_item(parent)
+        assert not ScopeItem.objects.filter(pk=parent.pk).exists()
+        assert not ScopeItem.objects.filter(pk=child.pk).exists()
+
+    def test_reject_pending_delete_restores_item(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, item = self._make_pending_delete(user, exhibit)
+        reject_ai_item(item)
+        item.refresh_from_db()
+        assert item.is_pending_review is False
+        assert item.pending_delete is False
+        assert item.text == 'Item to delete'
+
+    def test_accept_all_handles_pending_deletes(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, delete_item = self._make_pending_delete(user, exhibit)
+        delete_pk = delete_item.pk
+        # Also add a normal pending edit
+        section2 = ExhibitSectionFactory(scope_exhibit=exhibit)
+        edit_item = ScopeItemFactory(
+            section=section2, text='Edited', pending_original_text='Original',
+            is_pending_review=True, created_by=user,
+        )
+        accept_all_pending(exhibit)
+        assert not ScopeItem.objects.filter(pk=delete_pk).exists()
+        edit_item.refresh_from_db()
+        assert edit_item.is_pending_review is False
+
+    def test_reject_all_handles_pending_deletes(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, delete_item = self._make_pending_delete(user, exhibit)
+        reject_all_pending(exhibit)
+        delete_item.refresh_from_db()
+        assert delete_item.is_pending_review is False
+        assert delete_item.pending_delete is False
+
+
+# ---------------------------------------------------------------------------
+# Pending delete: view (_apply_proposed_changes)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestApplyChangesDelete:
+
+    def test_delete_action_sets_pending_not_immediate_delete(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        item = ScopeItemFactory(section=section, text='Existing item', created_by=user)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {
+            'message': '',
+            'proposed_changes': [
+                {'action': 'delete', 'target_item_pk': item.pk}
+            ],
+        }
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            response = client.post(url, {'message': 'Delete that item'})
+        assert response.status_code == 200
+        item.refresh_from_db()
+        assert item.is_pending_review is True
+        assert item.pending_delete is True
+
+    def test_tool_only_response_generates_fallback_message(self, client):
+        """When Claude returns only tool calls (no text), a meaningful fallback is saved."""
+        from ai_services.models import ChatMessage, ChatSession
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {
+            'message': '',
+            'proposed_changes': [
+                {'action': 'add', 'section_name': 'Scope of Work', 'text': 'New item.', 'level': 0}
+            ],
+        }
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            response = client.post(url, {'message': 'Add an item'})
+        assert response.status_code == 200
+        session = ChatSession.objects.get(exhibit=exhibit)
+        assistant_msg = session.messages.filter(role='assistant').first()
+        assert 'Done' in assistant_msg.content
+        assert '1 change' in assistant_msg.content
+        assert 'Sorry' not in assistant_msg.content
+
+
+# ---------------------------------------------------------------------------
+# _apply_proposed_changes: parent targeting via parent_item_pk
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestApplyChangesAddParent:
+
+    def test_add_with_parent_pk_nests_correctly(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        parent_item = ScopeItemFactory(
+            section=section, text='Parent item', level=0, order=0, parent=None,
+            created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Child under parent.',
+            'level': 1,
+            'parent_item_pk': parent_item.pk,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        child = ScopeItem.objects.get(text='Child under parent.')
+        assert child.parent == parent_item
+        assert child.level == 1
+
+    def test_add_with_parent_pk_after_existing_children(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        parent_item = ScopeItemFactory(
+            section=section, text='Parent', level=0, order=0, parent=None,
+            created_by=user,
+        )
+        ScopeItemFactory(
+            section=section, text='Existing child', level=1, order=0,
+            parent=parent_item, created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Second child.',
+            'level': 1,
+            'parent_item_pk': parent_item.pk,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        new_child = ScopeItem.objects.get(text='Second child.')
+        assert new_child.parent == parent_item
+        assert new_child.order == 1  # after existing child at order=0
+
+    def test_add_with_invalid_parent_pk_falls_back(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        fallback_parent = ScopeItemFactory(
+            section=section, text='Fallback parent', level=0, order=0, parent=None,
+            created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Child with bad pk.',
+            'level': 1,
+            'parent_item_pk': 99999,  # nonexistent
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        child = ScopeItem.objects.get(text='Child with bad pk.')
+        assert child.parent == fallback_parent  # fell back to last level-0 item
+
+    def test_add_without_parent_pk_backward_compat(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        top_item = ScopeItemFactory(
+            section=section, text='Top item', level=0, order=0, parent=None,
+            created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'New top-level item.',
+            'level': 0,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        new_item = ScopeItem.objects.get(text='New top-level item.')
+        assert new_item.parent is None
+        assert new_item.level == 0

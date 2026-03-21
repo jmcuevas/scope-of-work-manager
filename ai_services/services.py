@@ -22,6 +22,55 @@ GAP_FILL_THRESHOLD = 5
 
 
 # ---------------------------------------------------------------------------
+# Chat tool definitions (Claude Tool Use API)
+# ---------------------------------------------------------------------------
+
+CHAT_TOOLS = [
+    {
+        "name": "add_scope_item",
+        "description": "Add a new scope item to a section of the exhibit.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "section_name": {"type": "string", "description": "Exact name of the target section."},
+                "text": {"type": "string", "description": "The scope item text."},
+                "level": {"type": "integer", "enum": [0, 1], "description": "0 = top-level, 1 = sub-item."},
+                "parent_item_pk": {
+                    "type": "integer",
+                    "description": "pk of the parent item to nest under. Required when level=1. Omit for top-level items.",
+                },
+            },
+            "required": ["section_name", "text", "level"],
+        },
+    },
+    {
+        "name": "edit_scope_item",
+        "description": "Edit an existing scope item identified by its pk.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_item_pk": {"type": "integer", "description": "The pk of the item to edit."},
+                "text": {"type": "string", "description": "The new text for the item."},
+                "level": {"type": "integer", "enum": [0, 1], "description": "0 = top-level, 1 = sub-item."},
+            },
+            "required": ["target_item_pk", "text", "level"],
+        },
+    },
+    {
+        "name": "delete_scope_item",
+        "description": "Delete an existing scope item identified by its pk.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_item_pk": {"type": "integer", "description": "The pk of the item to delete."},
+            },
+            "required": ["target_item_pk"],
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 
@@ -119,6 +168,102 @@ def _parse_json_response(text):
         return json.loads(text)
     except (json.JSONDecodeError, IndexError):
         return None
+
+
+def _call_claude_with_tools(system_prompt, messages, tools, exhibit=None, request_type=None):
+    """
+    Send a request to Claude with tool definitions and return parsed response.
+
+    Returns dict: {"text": "...", "tool_calls": [{"name": "...", "input": {...}}]}
+    Raises AIServiceError on failure.
+    """
+    client = _get_client()
+    last_error = None
+
+    for attempt in range(2):
+        start = time.monotonic()
+        try:
+            response = client.messages.create(
+                model='claude-sonnet-4-6',
+                max_tokens=4096,
+                system=system_prompt,
+                messages=messages,
+                tools=tools,
+            )
+            latency_ms = int((time.monotonic() - start) * 1000)
+            tokens = response.usage.input_tokens + response.usage.output_tokens
+
+            AIRequestLog.objects.create(
+                request_type=request_type,
+                exhibit=exhibit,
+                success=True,
+                tokens_used=tokens,
+                latency_ms=latency_ms,
+            )
+
+            # Extract text blocks and tool_use blocks
+            text_parts = []
+            tool_calls = []
+            for block in response.content:
+                if block.type == 'text':
+                    text_parts.append(block.text)
+                elif block.type == 'tool_use':
+                    tool_calls.append({'name': block.name, 'input': block.input})
+
+            return {'text': '\n\n'.join(text_parts), 'tool_calls': tool_calls}
+
+        except anthropic.APITimeoutError:
+            last_error = 'Request timed out. Please try again.'
+            break
+
+        except anthropic.APIStatusError as e:
+            last_error = str(e)
+            if e.status_code < 500:
+                break
+
+        except Exception as e:
+            last_error = str(e)
+            break
+
+    latency_ms = int((time.monotonic() - start) * 1000)
+    AIRequestLog.objects.create(
+        request_type=request_type,
+        exhibit=exhibit,
+        success=False,
+        error_message=last_error or 'Unknown error',
+        latency_ms=latency_ms,
+    )
+    raise AIServiceError(last_error or 'AI request failed')
+
+
+def _tool_calls_to_changes(tool_calls):
+    """Convert tool_use calls into the proposed_changes list format."""
+    changes = []
+    for tc in tool_calls:
+        inp = tc['input']
+        if tc['name'] == 'add_scope_item':
+            change = {
+                'action': 'add',
+                'section_name': inp['section_name'],
+                'text': inp['text'],
+                'level': inp['level'],
+            }
+            if 'parent_item_pk' in inp:
+                change['parent_item_pk'] = inp['parent_item_pk']
+            changes.append(change)
+        elif tc['name'] == 'edit_scope_item':
+            changes.append({
+                'action': 'edit',
+                'target_item_pk': inp['target_item_pk'],
+                'text': inp['text'],
+                'level': inp['level'],
+            })
+        elif tc['name'] == 'delete_scope_item':
+            changes.append({
+                'action': 'delete',
+                'target_item_pk': inp['target_item_pk'],
+            })
+    return changes
 
 
 def _build_existing_scope_context(exhibit):
@@ -499,7 +644,6 @@ def chat_with_exhibit(exhibit, conversation_history):
             "message": "...",           # assistant reply to display
             "proposed_changes": [...]   # list of change dicts (may be empty)
         }
-    or None if the response could not be parsed.
 
     Raises:
         AIDisabledError — if AI_ENABLED=False
@@ -514,33 +658,21 @@ def chat_with_exhibit(exhibit, conversation_history):
     # Build the system prompt with live exhibit context injected
     system_prompt = CHAT_SYSTEM_PROMPT + f"\n\nCURRENT EXHIBIT CONTEXT (JSON):\n{context_json}\n"
 
-    # Re-wrap assistant messages in JSON so Claude maintains JSON output format.
-    # DB stores the parsed plain-text message, but Claude needs to see its own
-    # JSON output pattern to stay in structured-response mode.
+    # Build API messages — assistant messages are plain text now (no JSON wrapping)
     api_messages = []
     for msg in conversation_history:
-        if msg['role'] == 'assistant':
-            api_messages.append({
-                'role': 'assistant',
-                'content': json.dumps({
-                    'message': msg['content'],
-                    'proposed_changes': [],
-                }),
-            })
-        else:
-            api_messages.append(msg)
+        api_messages.append({'role': msg['role'], 'content': msg['content']})
 
-    text = _call_claude(
+    result = _call_claude_with_tools(
         system_prompt=system_prompt,
         messages=api_messages,
+        tools=CHAT_TOOLS,
         exhibit=exhibit,
         request_type=AIRequestLog.RequestType.CHAT,
     )
-    parsed = _parse_json_response(text)
-    if parsed is None:
-        return None
 
-    raw_message = parsed.get('message', '').strip()
+    raw_message = result['text'].strip()
+    proposed_changes = _tool_calls_to_changes(result['tool_calls'])
 
     # Build ref→pk mapping from context and linkify item references
     ref_to_pk = {}
@@ -552,5 +684,5 @@ def chat_with_exhibit(exhibit, conversation_history):
 
     return {
         'message': linkified_message,
-        'proposed_changes': parsed.get('proposed_changes', []),
+        'proposed_changes': proposed_changes,
     }

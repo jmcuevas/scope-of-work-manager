@@ -5,13 +5,15 @@
 {% if item.is_pending_review %}
 <!-- ── Pending AI review state ─────────────────────────────────────── -->
 <div id="item-{{ item.pk }}"
-     class="flex items-start justify-between py-2.5 {% if item.pending_original_text %}bg-amber-50 border-l-2 border-amber-400{% else %}bg-green-50 border-l-2 border-green-400{% endif %}"
+     class="flex items-start justify-between py-2.5 {% if item.pending_delete %}bg-red-50 border-l-2 border-red-400{% elif item.pending_original_text %}bg-amber-50 border-l-2 border-amber-400{% else %}bg-green-50 border-l-2 border-green-400{% endif %}"
      style="padding-left: {{ item.level|add:1 }}rem; padding-right: 1rem;">
   <div class="flex-1">
     {% if item_number %}
       <span class="text-gray-400 font-mono text-xs mr-2 select-none">{{ item_number }}.</span>
     {% endif %}
-    {% if item.pending_original_text %}
+    {% if item.pending_delete %}
+      <p class="text-sm text-red-500 line-through leading-relaxed">{{ item.text }}</p>
+    {% elif item.pending_original_text %}
       <p class="text-sm text-red-400 line-through leading-relaxed mb-0.5">{{ item.pending_original_text }}</p>
       <p class="text-sm text-green-800 leading-relaxed font-medium">{{ item.text }}</p>
     {% else %}

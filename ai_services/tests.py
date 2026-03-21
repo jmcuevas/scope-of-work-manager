@@ -16,10 +16,13 @@ from .models import AIRequestLog
 from .services import (
     AIDisabledError,
     AIServiceError,
+    CHAT_TOOLS,
     _build_structured_chat_context,
     _call_claude,
+    _call_claude_with_tools,
     _linkify_item_refs,
     _parse_json_response,
+    _tool_calls_to_changes,
     chat_with_exhibit,
     check_exhibit_completeness,
     expand_scope_item,
@@ -64,6 +67,24 @@ def _mock_response(text):
     response.usage.input_tokens = 100
     response.usage.output_tokens = 200
     return response
+
+
+def _mock_tool_response(text='', tool_calls=None):
+    """Build a mock Anthropic response with TextBlock and ToolUseBlock content."""
+    content = []
+    if text:
+        content.append(MagicMock(type='text', text=text))
+    for tc in (tool_calls or []):
+        block = MagicMock(type='tool_use')
+        # MagicMock treats 'name' as a special constructor arg, so set it after init
+        block.name = tc['name']
+        block.input = tc['input']
+        content.append(block)
+    resp = MagicMock()
+    resp.content = content
+    resp.usage.input_tokens = 100
+    resp.usage.output_tokens = 50
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -616,49 +637,52 @@ class TestChatWithExhibit:
         user = PMUserFactory()
         exhibit = _make_exhibit(user)
 
-        payload = json.dumps({
-            'message': 'Looks good! The scope covers the main items.',
-            'proposed_changes': [],
-        })
         history = [{'role': 'user', 'content': 'Does the scope look complete?'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='Looks good! The scope covers the main items.',
+            )
             result = chat_with_exhibit(exhibit, history)
 
         assert result['message'] == 'Looks good! The scope covers the main items.'
         assert result['proposed_changes'] == []
 
-    def test_returns_proposed_changes(self):
+    def test_returns_proposed_changes_from_tool_calls(self):
         user = PMUserFactory()
         exhibit = _make_exhibit(user)
 
-        payload = json.dumps({
-            'message': "I've suggested one addition.",
-            'proposed_changes': [
-                {'action': 'add', 'section_name': 'Scope of Work',
-                 'text': 'Coordinate with Electrical Contractor.', 'level': 0},
-            ],
-        })
         history = [{'role': 'user', 'content': 'Add a coordination item.'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text="I've suggested one addition.",
+                tool_calls=[{
+                    'name': 'add_scope_item',
+                    'input': {
+                        'section_name': 'Scope of Work',
+                        'text': 'Coordinate with Electrical Contractor.',
+                        'level': 0,
+                    },
+                }],
+            )
             result = chat_with_exhibit(exhibit, history)
 
         assert len(result['proposed_changes']) == 1
         assert result['proposed_changes'][0]['action'] == 'add'
+        assert result['proposed_changes'][0]['section_name'] == 'Scope of Work'
 
     def test_passes_full_conversation_history_to_api(self):
         user = PMUserFactory()
         exhibit = _make_exhibit(user)
 
-        payload = json.dumps({'message': 'Sure.', 'proposed_changes': []})
         history = [
             {'role': 'user', 'content': 'First message'},
             {'role': 'assistant', 'content': 'First reply'},
             {'role': 'user', 'content': 'Second message'},
         ]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='Sure.',
+            )
             chat_with_exhibit(exhibit, history)
 
         call_args = mock_client.return_value.messages.create.call_args
@@ -666,21 +690,8 @@ class TestChatWithExhibit:
         # User messages passed through unchanged
         assert sent_messages[0] == {'role': 'user', 'content': 'First message'}
         assert sent_messages[2] == {'role': 'user', 'content': 'Second message'}
-        # Assistant messages re-wrapped in JSON to maintain output format
-        assert sent_messages[1]['role'] == 'assistant'
-        wrapped = json.loads(sent_messages[1]['content'])
-        assert wrapped == {'message': 'First reply', 'proposed_changes': []}
-
-    def test_returns_none_on_malformed_json(self):
-        user = PMUserFactory()
-        exhibit = _make_exhibit(user)
-
-        history = [{'role': 'user', 'content': 'Hello'}]
-        with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response('bad json')
-            result = chat_with_exhibit(exhibit, history)
-
-        assert result is None
+        # Assistant messages are plain text now (no JSON wrapping)
+        assert sent_messages[1] == {'role': 'assistant', 'content': 'First reply'}
 
     def test_raises_ai_disabled_error(self, settings):
         settings.AI_ENABLED = False
@@ -693,15 +704,68 @@ class TestChatWithExhibit:
         user = PMUserFactory()
         exhibit = _make_exhibit(user)
 
-        payload = json.dumps({'message': 'Done.', 'proposed_changes': []})
         history = [{'role': 'user', 'content': 'Hello'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='Done.',
+            )
             chat_with_exhibit(exhibit, history)
 
         log = AIRequestLog.objects.latest('created_at')
         assert log.request_type == AIRequestLog.RequestType.CHAT
         assert log.success is True
+
+    def test_text_only_response_returns_empty_changes(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        history = [{'role': 'user', 'content': 'What is this exhibit about?'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='This exhibit covers HVAC scope.',
+            )
+            result = chat_with_exhibit(exhibit, history)
+
+        assert result['message'] == 'This exhibit covers HVAC scope.'
+        assert result['proposed_changes'] == []
+
+    def test_passes_tools_to_api(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='Hi.',
+            )
+            chat_with_exhibit(exhibit, history)
+
+        call_args = mock_client.return_value.messages.create.call_args
+        assert call_args.kwargs['tools'] == CHAT_TOOLS
+
+    def test_tool_only_no_text_returns_empty_message(self):
+        """When Claude returns only tool calls with no text block, message should be empty."""
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+
+        history = [{'role': 'user', 'content': 'Add a coordination item.'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='',
+                tool_calls=[{
+                    'name': 'add_scope_item',
+                    'input': {
+                        'section_name': 'Scope of Work',
+                        'text': 'Coordinate with other trades.',
+                        'level': 0,
+                    },
+                }],
+            )
+            result = chat_with_exhibit(exhibit, history)
+
+        assert result['message'] == ''
+        assert len(result['proposed_changes']) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1031,10 +1095,9 @@ class TestChatWithExhibitStructuredContext:
         section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
         item = ScopeItemFactory(section=section, text='Provide ductwork.', created_by=user)
 
-        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
         history = [{'role': 'user', 'content': 'Hello'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(text='OK.')
             chat_with_exhibit(exhibit, history)
 
         call_args = mock_client.return_value.messages.create.call_args
@@ -1046,10 +1109,9 @@ class TestChatWithExhibitStructuredContext:
         exhibit = _make_exhibit(user)
         section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
 
-        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
         history = [{'role': 'user', 'content': 'Hello'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(text='OK.')
             chat_with_exhibit(exhibit, history)
 
         call_args = mock_client.return_value.messages.create.call_args
@@ -1066,10 +1128,9 @@ class TestChatWithExhibitStructuredContext:
             status=Note.Status.OPEN, created_by=user,
         )
 
-        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
         history = [{'role': 'user', 'content': 'Hello'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(text='OK.')
             chat_with_exhibit(exhibit, history)
 
         call_args = mock_client.return_value.messages.create.call_args
@@ -1086,10 +1147,9 @@ class TestChatWithExhibitStructuredContext:
             status=Note.Status.RESOLVED, created_by=user,
         )
 
-        payload = json.dumps({'message': 'OK.', 'proposed_changes': []})
         history = [{'role': 'user', 'content': 'Hello'}]
         with patch('ai_services.services._get_client') as mock_client:
-            mock_client.return_value.messages.create.return_value = _mock_response(payload)
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(text='OK.')
             chat_with_exhibit(exhibit, history)
 
         call_args = mock_client.return_value.messages.create.call_args
@@ -1150,3 +1210,184 @@ class TestLinkifyItemRefs:
         ref_to_pk = {'B.2': 50}
         result = _linkify_item_refs('Compare B.2 and also B.2 again.', ref_to_pk)
         assert result.count('scrollToItem(50)') == 2
+
+
+# ---------------------------------------------------------------------------
+# _tool_calls_to_changes
+# ---------------------------------------------------------------------------
+
+class TestToolCallsToChanges:
+
+    def test_add_tool_call(self):
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work',
+            'text': 'Provide ductwork.',
+            'level': 0,
+        }}]
+        changes = _tool_calls_to_changes(tool_calls)
+        assert changes == [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Provide ductwork.',
+            'level': 0,
+        }]
+
+    def test_edit_tool_call(self):
+        tool_calls = [{'name': 'edit_scope_item', 'input': {
+            'target_item_pk': 42,
+            'text': 'Updated text.',
+            'level': 1,
+        }}]
+        changes = _tool_calls_to_changes(tool_calls)
+        assert changes == [{
+            'action': 'edit',
+            'target_item_pk': 42,
+            'text': 'Updated text.',
+            'level': 1,
+        }]
+
+    def test_delete_tool_call(self):
+        tool_calls = [{'name': 'delete_scope_item', 'input': {
+            'target_item_pk': 17,
+        }}]
+        changes = _tool_calls_to_changes(tool_calls)
+        assert changes == [{'action': 'delete', 'target_item_pk': 17}]
+
+    def test_mixed_tool_calls(self):
+        tool_calls = [
+            {'name': 'add_scope_item', 'input': {
+                'section_name': 'Inclusions', 'text': 'New item.', 'level': 0}},
+            {'name': 'edit_scope_item', 'input': {
+                'target_item_pk': 10, 'text': 'Edited.', 'level': 0}},
+            {'name': 'delete_scope_item', 'input': {'target_item_pk': 5}},
+        ]
+        changes = _tool_calls_to_changes(tool_calls)
+        assert len(changes) == 3
+        assert changes[0]['action'] == 'add'
+        assert changes[1]['action'] == 'edit'
+        assert changes[2]['action'] == 'delete'
+
+    def test_empty_tool_calls(self):
+        assert _tool_calls_to_changes([]) == []
+
+    def test_add_with_parent_item_pk(self):
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work',
+            'text': 'Include hangers.',
+            'level': 1,
+            'parent_item_pk': 101,
+        }}]
+        changes = _tool_calls_to_changes(tool_calls)
+        assert changes == [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Include hangers.',
+            'level': 1,
+            'parent_item_pk': 101,
+        }]
+
+    def test_add_without_parent_item_pk(self):
+        """Backward compat: no parent_item_pk key when omitted from input."""
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work',
+            'text': 'Provide ductwork.',
+            'level': 0,
+        }}]
+        changes = _tool_calls_to_changes(tool_calls)
+        assert 'parent_item_pk' not in changes[0]
+
+
+# ---------------------------------------------------------------------------
+# _call_claude_with_tools
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCallClaudeWithTools:
+
+    def test_returns_text_and_tool_calls(self):
+        exhibit = _make_exhibit(PMUserFactory())
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='Here is an addition.',
+                tool_calls=[{'name': 'add_scope_item', 'input': {
+                    'section_name': 'Scope of Work', 'text': 'New item.', 'level': 0,
+                }}],
+            )
+            result = _call_claude_with_tools(
+                'sys', [{'role': 'user', 'content': 'add item'}],
+                tools=CHAT_TOOLS, exhibit=exhibit,
+                request_type=AIRequestLog.RequestType.CHAT,
+            )
+        assert result['text'] == 'Here is an addition.'
+        assert len(result['tool_calls']) == 1
+        assert result['tool_calls'][0]['name'] == 'add_scope_item'
+
+    def test_passes_tools_to_api(self):
+        exhibit = _make_exhibit(PMUserFactory())
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(text='OK.')
+            _call_claude_with_tools(
+                'sys', [{'role': 'user', 'content': 'hi'}],
+                tools=CHAT_TOOLS, exhibit=exhibit,
+                request_type=AIRequestLog.RequestType.CHAT,
+            )
+        call_args = mock_client.return_value.messages.create.call_args
+        assert call_args.kwargs['tools'] == CHAT_TOOLS
+
+    def test_logs_success(self):
+        exhibit = _make_exhibit(PMUserFactory())
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(text='OK.')
+            _call_claude_with_tools(
+                'sys', [{'role': 'user', 'content': 'hi'}],
+                tools=CHAT_TOOLS, exhibit=exhibit,
+                request_type=AIRequestLog.RequestType.CHAT,
+            )
+        log = AIRequestLog.objects.get()
+        assert log.success is True
+        assert log.tokens_used == 150
+        assert log.request_type == AIRequestLog.RequestType.CHAT
+
+    def test_retries_on_5xx(self):
+        exhibit = _make_exhibit(PMUserFactory())
+        server_error = anthropic.APIStatusError(
+            message='Server Error',
+            response=MagicMock(status_code=500),
+            body={},
+        )
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.side_effect = [
+                server_error,
+                _mock_tool_response(text='Recovered.'),
+            ]
+            result = _call_claude_with_tools(
+                'sys', [{'role': 'user', 'content': 'hi'}],
+                tools=CHAT_TOOLS, exhibit=exhibit,
+                request_type=AIRequestLog.RequestType.CHAT,
+            )
+        assert result['text'] == 'Recovered.'
+
+    def test_raises_on_failure(self):
+        exhibit = _make_exhibit(PMUserFactory())
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.side_effect = Exception('boom')
+            with pytest.raises(AIServiceError):
+                _call_claude_with_tools(
+                    'sys', [{'role': 'user', 'content': 'hi'}],
+                    tools=CHAT_TOOLS, exhibit=exhibit,
+                    request_type=AIRequestLog.RequestType.CHAT,
+                )
+
+    def test_text_only_response(self):
+        exhibit = _make_exhibit(PMUserFactory())
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='Just text, no tools.',
+            )
+            result = _call_claude_with_tools(
+                'sys', [{'role': 'user', 'content': 'hi'}],
+                tools=CHAT_TOOLS, exhibit=exhibit,
+                request_type=AIRequestLog.RequestType.CHAT,
+            )
+        assert result['text'] == 'Just text, no tools.'
+        assert result['tool_calls'] == []

@@ -230,33 +230,15 @@ USING CONTEXT:
 - Do NOT propose edits or deletes for items where `is_pending_review` is true — they are already awaiting review.
 - Reference open notes when they are relevant to the PM's question or the scope.
 
-OUTPUT FORMAT:
-Return ONLY valid JSON — no explanation, no markdown, no code fences.
-
-{{
-  "message": "Your conversational reply here.",
-  "proposed_changes": [
-    {{
-      "action": "add",
-      "section_name": "Scope of Work",
-      "text": "Coordinate with Electrical Contractor for panel room access.",
-      "level": 0
-    }},
-    {{
-      "action": "edit",
-      "target_item_pk": 42,
-      "text": "Provide and install all ductwork per Contract Documents.",
-      "level": 0
-    }},
-    {{
-      "action": "delete",
-      "target_item_pk": 17
-    }}
-  ]
-}}
-
-- "proposed_changes" may be an empty list [] if no changes are proposed.
+RESPONSE FORMAT:
+- Write your reply as plain conversational text — NOT JSON.
+- When you want to make changes to the exhibit (add, edit, or delete items),
+  use the provided tools. You may call multiple tools in a single response.
+- Only use tools when the PM explicitly requests changes or you identify
+  a clear gap or error. Do not suggest changes unprompted.
 - For "add": section_name must match an existing section exactly (case-insensitive).
-- For "edit" and "delete": target_item_pk identifies the item to change.
+  When adding a sub-item (level=1), include "parent_item_pk" set to the pk of the parent item.
+  For top-level items (level=0), omit parent_item_pk.
+- For "edit" and "delete": use target_item_pk from the item's pk field.
 - level 0 = top-level item, level 1 = sub-item under a parent.
 """.format(language_rules=_LANGUAGE_RULES)

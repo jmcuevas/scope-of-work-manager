@@ -11,9 +11,10 @@
   <div class="max-w-[80%] {% if error %}bg-red-50 border border-red-200{% else %}bg-gray-100{% endif %} text-gray-800 rounded-2xl rounded-bl-sm px-4 py-3">
     <p class="text-sm leading-relaxed whitespace-pre-wrap">{{ assistant_message|safe }}</p>
     {% if changes_applied %}
-    <p class="text-xs text-primary-600 font-medium mt-2">
+    <a href="#" onclick="highlightItems([{{ changes_applied_pks|join:',' }}]); return false;"
+       class="block text-xs text-primary-600 font-medium mt-2 hover:underline cursor-pointer">
       ✓ {{ changes_applied }} change{{ changes_applied|pluralize }} added as pending items — review in the editor.
-    </p>
+    </a>
     {% endif %}
   </div>
 </div>

@@ -479,3 +479,12 @@ Track progress phase by phase. Check items off as completed.
 - [x] Chat templates updated: `|safe` for assistant messages only (user messages stay escaped) *(2026-03-18)*
 - [x] `scrollToItem(pk)` JS function added to editor: smooth-scrolls to item, applies 2s highlight ring *(2026-03-18)*
 - [x] Tests: `compute_section_numbering` with letter prefix, `compute_exhibit_numbering`, `_linkify_item_refs`, structured context `ref`/`letter` — 284 tests passing *(2026-03-18)*
+
+### Step 4: Claude Tool Use for Chat (Roadmap 1.3)
+
+- [x] `CHAT_TOOLS` schema: `add_scope_item`, `edit_scope_item`, `delete_scope_item` tool definitions *(2026-03-18)*
+- [x] `_call_claude_with_tools()` helper: sends tools param, extracts TextBlock + ToolUseBlock from response, logs to AIRequestLog *(2026-03-18)*
+- [x] `_tool_calls_to_changes()` adapter: converts tool calls to existing `proposed_changes` format *(2026-03-18)*
+- [x] `chat_with_exhibit()` rewritten: uses `_call_claude_with_tools()` instead of `_call_claude()` + JSON parsing; assistant messages passed as plain text (no JSON wrapping); return interface unchanged *(2026-03-18)*
+- [x] `CHAT_SYSTEM_PROMPT` simplified: removed JSON OUTPUT FORMAT section, replaced with tool usage instructions *(2026-03-18)*
+- [x] Tests: `_tool_calls_to_changes` (add/edit/delete/mixed/empty), `_call_claude_with_tools` (success/retry/failure/tools-passed), chat tests updated for tool-based mocks — 298 tests passing *(2026-03-18)*

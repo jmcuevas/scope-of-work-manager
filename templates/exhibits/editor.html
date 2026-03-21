@@ -141,7 +141,10 @@
   </div>
 
   <!-- Section list -->
-  <div id="section-list">
+  <div id="section-list"
+       hx-get="{% url 'exhibits:section_list' exhibit.pk %}"
+       hx-trigger="pendingChanged from:body"
+       hx-swap="innerHTML">
     {% include "exhibits/partials/section_list.html" %}
   </div>
 
@@ -385,6 +388,23 @@
       el.classList.add('ring-2', 'ring-primary-400');
       setTimeout(function() { el.classList.remove('ring-2', 'ring-primary-400'); }, 2000);
     }
+  }
+
+  function highlightItems(pks) {
+    if (!pks || pks.length === 0) return;
+    // Scroll to the first item found
+    var scrolled = false;
+    pks.forEach(function(pk) {
+      var el = document.getElementById('item-' + pk);
+      if (el) {
+        if (!scrolled) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          scrolled = true;
+        }
+        el.classList.add('ring-2', 'ring-primary-400');
+        setTimeout(function() { el.classList.remove('ring-2', 'ring-primary-400'); }, 3000);
+      }
+    });
   }
 
   function closeAllPopups() {

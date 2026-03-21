@@ -880,9 +880,10 @@ def section_list(request, pk):
 def _apply_proposed_changes(exhibit, changes, user):
     """
     Apply Claude's proposed add/edit/delete actions as pending scope items.
-    Returns the number of changes successfully applied.
+    Returns (applied_count, applied_pks) — count and list of affected item PKs.
     """
     applied = 0
+    applied_pks = []
     section_by_name = {
         s.name.lower(): s
         for s in exhibit.sections.prefetch_related('items').order_by('order')
@@ -897,22 +898,37 @@ def _apply_proposed_changes(exhibit, changes, user):
             level = int(change.get('level', 0))
             section = section_by_name.get(section_name.lower())
             if section and text:
-                last = section.items.order_by('-order').values_list('order', flat=True).first()
-                last_order = (last + 1) if last is not None else 0
                 parent = None
                 if level > 0:
-                    parent = section.items.filter(level=level - 1).order_by('-order').first()
-                ScopeItem.objects.create(
+                    parent_pk = change.get('parent_item_pk')
+                    if parent_pk:
+                        try:
+                            parent = ScopeItem.objects.get(pk=parent_pk, section=section)
+                        except ScopeItem.DoesNotExist:
+                            parent = None
+                    # Fallback: last item at parent level in section
+                    if parent is None:
+                        parent = section.items.filter(level=level - 1).order_by('-order').first()
+                # Order scoped to siblings (same parent)
+                sibling_last = (
+                    section.items.filter(parent=parent)
+                    .order_by('-order')
+                    .values_list('order', flat=True)
+                    .first()
+                )
+                next_order = (sibling_last + 1) if sibling_last is not None else 0
+                item = ScopeItem.objects.create(
                     section=section,
                     text=text,
                     level=level,
                     parent=parent,
-                    order=last_order,
+                    order=next_order,
                     is_ai_generated=True,
                     is_pending_review=True,
                     created_by=user,
                 )
                 applied += 1
+                applied_pks.append(item.pk)
 
         elif action == 'edit':
             item_pk = change.get('target_item_pk')
@@ -926,6 +942,7 @@ def _apply_proposed_changes(exhibit, changes, user):
                     item.is_ai_generated = True
                     item.save(update_fields=['text', 'pending_original_text', 'is_pending_review', 'is_ai_generated', 'updated_at'])
                     applied += 1
+                    applied_pks.append(item.pk)
                 except ScopeItem.DoesNotExist:
                     pass
 
@@ -934,12 +951,15 @@ def _apply_proposed_changes(exhibit, changes, user):
             if item_pk:
                 try:
                     item = ScopeItem.objects.get(pk=item_pk, section__scope_exhibit=exhibit)
-                    item.delete()
+                    item.is_pending_review = True
+                    item.pending_delete = True
+                    item.save(update_fields=['is_pending_review', 'pending_delete', 'updated_at'])
                     applied += 1
+                    applied_pks.append(item.pk)
                 except ScopeItem.DoesNotExist:
                     pass
 
-    return applied
+    return applied, applied_pks
 
 
 @login_required
@@ -997,7 +1017,7 @@ def ai_chat_send(request, pk):
     conversation = [{'role': role, 'content': content} for role, content in conversation]
 
     assistant_message = None
-    changes_applied = 0
+    changes_applied_pks = []
     error = False
 
     try:
@@ -1006,24 +1026,31 @@ def ai_chat_send(request, pk):
             assistant_message = result.get('message', '').strip()
             proposed_changes = result.get('proposed_changes', [])
             if proposed_changes:
-                changes_applied = _apply_proposed_changes(exhibit, proposed_changes, request.user)
+                _count, changes_applied_pks = _apply_proposed_changes(exhibit, proposed_changes, request.user)
     except (AIDisabledError, AIServiceError) as e:
         assistant_message = f'Sorry, I ran into an error: {e}'
         error = True
 
+    changes_applied = len(changes_applied_pks)
+
     if not assistant_message:
-        assistant_message = 'Sorry, I could not generate a response. Please try again.'
+        if changes_applied:
+            assistant_message = f'Done — {changes_applied} change{"s" if changes_applied != 1 else ""} proposed for your review.'
+        else:
+            assistant_message = 'Sorry, I could not generate a response. Please try again.'
 
     # Save assistant message
     ChatMessage.objects.create(
         session=session, role=ChatMessage.Role.ASSISTANT,
         content=assistant_message,
+        changes_applied_pks=changes_applied_pks,
     )
 
     response = render(request, 'exhibits/partials/ai_chat_messages.html', {
         'user_message': user_message,
         'assistant_message': assistant_message,
         'changes_applied': changes_applied,
+        'changes_applied_pks': changes_applied_pks,
         'error': error,
     })
     if changes_applied:

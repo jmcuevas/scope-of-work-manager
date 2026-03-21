@@ -73,6 +73,7 @@ class ChatMessage(models.Model):
         related_name='chat_messages',
     )
     tokens_used = models.PositiveIntegerField(null=True, blank=True)
+    changes_applied_pks = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

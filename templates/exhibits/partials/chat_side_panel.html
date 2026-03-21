@@ -38,6 +38,12 @@
   <div class="flex {% if msg.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
     <div class="max-w-[80%] {% if msg.role == 'user' %}bg-primary-600 text-white rounded-2xl rounded-br-sm{% else %}bg-gray-100 text-gray-800 rounded-2xl rounded-bl-sm{% endif %} px-4 py-3">
       <p class="text-sm leading-relaxed whitespace-pre-wrap">{% if msg.role == 'assistant' %}{{ msg.content|safe }}{% else %}{{ msg.content }}{% endif %}</p>
+      {% if msg.role == 'assistant' and msg.changes_applied_pks %}
+      <a href="#" onclick="highlightItems([{{ msg.changes_applied_pks|join:',' }}]); return false;"
+         class="block text-xs text-primary-600 font-medium mt-2 hover:underline cursor-pointer">
+        ✓ {{ msg.changes_applied_pks|length }} change{{ msg.changes_applied_pks|length|pluralize }} added as pending items — review in the editor.
+      </a>
+      {% endif %}
     </div>
   </div>
   {% endfor %}
