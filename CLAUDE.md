@@ -12,12 +12,12 @@ Full product specification: `docs/specs.md`. This is the authoritative reference
 |-------|-----------------|
 | Workflows & user stories | `## Detailed Workflow / User Stories` |
 | Data models (full detail) | `## Technical Architecture / System Design` |
-| AI service functions | `### AI Service Layer` |
+| AI service functions & chat infrastructure | `### AI Service Layer` |
+| AI UX entry points | `### AI Assistant UX` |
 | HTMX interaction patterns | `### HTMX Interaction Patterns` |
 | MVP scope boundaries | `### MVP Workflow Summary` |
 | Post-MVP deferred features | `### Post-MVP Architecture Notes` |
-| Production readiness backlog | `## Deployment Readiness Backlog` |
-| AI architecture roadmap | `## AI Architecture Roadmap` |
+| All pending work (deployment, AI, app features) | `## Pending Implementation` |
 
 ## Commands
 
