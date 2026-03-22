@@ -2050,6 +2050,85 @@ class TestSectionRewriteView:
 
 
 # ---------------------------------------------------------------------------
+# Section AI unified view
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSectionAIView:
+    def test_adds_item_via_tool(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+
+        mock_changes = [{'action': 'add', 'section_name': 'Scope', 'text': 'New AI item.', 'level': 0}]
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.section_ai_action', return_value=mock_changes):
+            response = client.post(url, {'instruction': 'add an exclusion for drywall'})
+
+        assert response.status_code == 200
+        item = ScopeItem.objects.get(section=section)
+        assert item.text == 'New AI item.'
+        assert item.is_pending_review is True
+        assert 'pendingChanged' in response.get('HX-Trigger', '')
+
+    def test_edits_existing_item_via_tool(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        item = ScopeItemFactory(section=section, text='Original text.', order=0, created_by=user)
+
+        mock_changes = [{'action': 'edit', 'target_item_pk': item.pk, 'text': 'Edited text.', 'level': 0}]
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.section_ai_action', return_value=mock_changes):
+            response = client.post(url, {'instruction': 'rewrite in subcontract language'})
+
+        assert response.status_code == 200
+        item.refresh_from_db()
+        assert item.text == 'Edited text.'
+        assert item.pending_original_text == 'Original text.'
+        assert item.is_pending_review is True
+
+    def test_empty_instruction_no_changes(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': ''})
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_ai_failure_no_changes(self, client):
+        from ai_services.services import AIServiceError
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.section_ai_action', side_effect=AIServiceError('fail')):
+            response = client.post(url, {'instruction': 'rewrite everything'})
+
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_company_scoping(self, client):
+        user = PMUserFactory()
+        other_user = PMUserFactory()
+        _login(client, other_user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': 'add item'})
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Note-to-scope AI conversion view
 # ---------------------------------------------------------------------------
 

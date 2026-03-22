@@ -3,7 +3,7 @@ from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items
+from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items, section_ai_action
 from django.conf import settings
 from django.utils import timezone
 from notes.forms import NoteForm
@@ -624,7 +624,37 @@ def item_expand(request, pk, section_pk, item_pk):
 
 
 # ---------------------------------------------------------------------------
-# AI: Bulk section rewrite
+# AI: Section-level AI action (unified — add, edit, delete based on prompt)
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_POST
+def section_ai(request, pk, section_pk):
+    """Handle a free-form AI instruction scoped to a single section."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+
+    instruction = request.POST.get('instruction', '').strip()
+    if not instruction:
+        return _item_list_response(request, exhibit, section)
+
+    try:
+        changes = section_ai_action(section, exhibit, instruction)
+    except (AIDisabledError, AIServiceError):
+        changes = None
+
+    if changes:
+        applied, _ = _apply_proposed_changes(exhibit, changes, request.user)
+        if applied:
+            response = _item_list_response(request, exhibit, section)
+            response['HX-Trigger'] = 'pendingChanged'
+            return response
+
+    return _item_list_response(request, exhibit, section)
+
+
+# ---------------------------------------------------------------------------
+# AI: Bulk section rewrite (kept for direct API use)
 # ---------------------------------------------------------------------------
 
 @login_required

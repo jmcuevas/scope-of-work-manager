@@ -32,48 +32,24 @@
           ✨
         </button>
         <div id="section-ai-panel-{{ section.pk }}"
-             class="hidden absolute right-0 top-8 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-80">
-          <!-- Generate item -->
-          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Generate Item</p>
-          <form hx-post="{% url 'exhibits:item_generate' exhibit.pk section.pk %}"
+             class="hidden absolute right-0 top-8 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-72">
+          <form hx-post="{% url 'exhibits:section_ai' exhibit.pk section.pk %}"
                 hx-target="#items-{{ section.pk }}"
                 hx-swap="innerHTML"
-                hx-indicator="#ai-item-spinner-{{ section.pk }}"
+                hx-indicator="#ai-section-spinner-{{ section.pk }}"
                 hx-on:htmx:after-request="document.getElementById('section-ai-panel-{{ section.pk }}').classList.add('hidden'); this.reset();"
                 class="space-y-2">
+            {% csrf_token %}
             <input type="text"
-                   id="section-ai-input-{{ section.pk }}"
-                   name="text"
-                   placeholder="Describe an item in plain language..."
+                   name="instruction"
+                   placeholder="e.g., add exclusion for GC work, rewrite in subcontract language..."
                    class="w-full text-xs text-gray-700 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-400">
             <button type="submit"
                     class="w-full flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors">
-              <span id="ai-item-spinner-{{ section.pk }}" class="htmx-indicator">⏳</span>
-              ✨ Generate
+              <span id="ai-section-spinner-{{ section.pk }}" class="htmx-indicator">⏳</span>
+              ✨ Go
             </button>
           </form>
-
-          <!-- Rewrite section -->
-          <div class="border-t border-gray-100 mt-3 pt-3">
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Rewrite All Items</p>
-            <form hx-post="{% url 'exhibits:section_rewrite' exhibit.pk section.pk %}"
-                  hx-target="#items-{{ section.pk }}"
-                  hx-swap="innerHTML"
-                  hx-indicator="#ai-rewrite-spinner-{{ section.pk }}"
-                  hx-on:htmx:after-request="document.getElementById('section-ai-panel-{{ section.pk }}').classList.add('hidden'); this.reset();"
-                  class="space-y-2">
-              {% csrf_token %}
-              <input type="text"
-                     name="instruction"
-                     placeholder="e.g., convert to subcontract language, add drawing refs..."
-                     class="w-full text-xs text-gray-700 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-400">
-              <button type="submit"
-                      class="w-full flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 rounded transition-colors">
-                <span id="ai-rewrite-spinner-{{ section.pk }}" class="htmx-indicator">⏳</span>
-                ✨ Rewrite
-              </button>
-            </form>
-          </div>
         </div>
       </div>
       {% endif %}

@@ -1479,6 +1479,81 @@ class TestRewriteSectionItems:
 
 
 # ---------------------------------------------------------------------------
+# section_ai_action
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSectionAIAction:
+    def test_returns_add_changes(self):
+        from ai_services.services import section_ai_action
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        ScopeItemFactory(section=section, text='Existing item.', order=0, created_by=user)
+
+        tool_calls = [
+            {'name': 'add_scope_item', 'input': {
+                'section_name': 'Scope of Work', 'text': 'New AI item.', 'level': 0,
+            }},
+        ]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                tool_calls=tool_calls,
+            )
+            result = section_ai_action(section, exhibit, 'add an exclusion')
+
+        assert len(result) == 1
+        assert result[0]['action'] == 'add'
+        assert result[0]['text'] == 'New AI item.'
+
+    def test_returns_edit_changes(self):
+        from ai_services.services import section_ai_action
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        item = ScopeItemFactory(section=section, text='Old text.', order=0, created_by=user)
+
+        tool_calls = [
+            {'name': 'edit_scope_item', 'input': {
+                'target_item_pk': item.pk, 'text': 'Rewritten text.', 'level': 0,
+            }},
+        ]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                tool_calls=tool_calls,
+            )
+            result = section_ai_action(section, exhibit, 'rewrite in subcontract language')
+
+        assert len(result) == 1
+        assert result[0]['action'] == 'edit'
+        assert result[0]['target_item_pk'] == item.pk
+
+    def test_no_tool_calls_returns_none(self):
+        from ai_services.services import section_ai_action
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_tool_response(
+                text='I don\'t understand.', tool_calls=[],
+            )
+            result = section_ai_action(section, exhibit, 'unclear instruction')
+
+        assert result is None
+
+    @pytest.mark.parametrize('enabled', [False])
+    def test_ai_disabled(self, settings, enabled):
+        from ai_services.services import section_ai_action
+        settings.AI_ENABLED = enabled
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        with pytest.raises(AIDisabledError):
+            section_ai_action(section, exhibit, 'anything')
+
+
+# ---------------------------------------------------------------------------
 # convert_note_to_scope
 # ---------------------------------------------------------------------------
 

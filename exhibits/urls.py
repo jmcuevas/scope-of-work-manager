@@ -87,6 +87,7 @@ urlpatterns = [
     path('<int:pk>/notes/<int:note_pk>/to-scope-item/', views.note_to_scope_item, name='note_to_scope_item'),
     path('<int:pk>/notes/<int:note_pk>/convert-ai/', views.note_to_scope_ai, name='note_to_scope_ai'),
     path('<int:pk>/sections/<int:section_pk>/rewrite/', views.section_rewrite, name='section_rewrite'),
+    path('<int:pk>/sections/<int:section_pk>/ai/', views.section_ai, name='section_ai'),
 
     # AI panel
     path('<int:pk>/ai-panel/', views.ai_panel, name='ai_panel'),

@@ -16,6 +16,7 @@ from .prompts import (
     REWRITE_SECTION_SYSTEM_PROMPT,
     SCOPE_FROM_DESCRIPTION_SYSTEM_PROMPT,
     SCOPE_ITEM_SYSTEM_PROMPT,
+    SECTION_AI_SYSTEM_PROMPT,
 )
 
 # Exhibits with this many items or more switch to gap-fill mode
@@ -625,6 +626,64 @@ What important scope items are missing from this exhibit?
         g for g in parsed['gaps']
         if g.get('text', '').strip() and g.get('section_name', '').strip()
     ] or []
+
+
+def section_ai_action(section, exhibit, instruction):
+    """
+    Handle a free-form AI instruction scoped to a single section.
+
+    Uses tool-based API to let Claude decide whether to add, edit, or delete
+    items based on the instruction. Returns a list of changes in the same
+    format as _tool_calls_to_changes, or None on failure.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    from exhibits.services import compute_exhibit_numbering, flatten_section_items
+
+    # Build section items context
+    numbers, _ = compute_exhibit_numbering(exhibit)
+    items = list(flatten_section_items(section))
+    items_json = []
+    for item in items:
+        d = {
+            'pk': item.pk,
+            'ref': numbers.get(item.pk, ''),
+            'text': item.text,
+            'level': item.level,
+        }
+        if item.parent_id:
+            d['parent_pk'] = item.parent_id
+        if item.is_pending_review:
+            d['is_pending_review'] = True
+        items_json.append(d)
+
+    user_prompt = json.dumps({
+        'trade': f'{exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}',
+        'section_name': section.name,
+        'instruction': instruction,
+        'items': items_json,
+    })
+
+    # Use only add/edit/delete tools (no convert_note_to_scope)
+    section_tools = CHAT_TOOLS[:3]
+
+    result = _call_claude_with_tools(
+        system_prompt=SECTION_AI_SYSTEM_PROMPT,
+        messages=[{'role': 'user', 'content': user_prompt}],
+        tools=section_tools,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.REWRITE_SECTION,
+    )
+
+    if not result or not result.get('tool_calls'):
+        return None
+
+    return _tool_calls_to_changes(result['tool_calls'])
 
 
 def rewrite_section_items(section, exhibit, instruction):
