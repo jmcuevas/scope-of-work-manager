@@ -86,6 +86,7 @@ class ScopeItem(models.Model):
     is_ai_generated = models.BooleanField(default=False)
     is_pending_review = models.BooleanField(default=False)
     pending_original_text = models.TextField(blank=True)
+    pending_delete = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

@@ -15,6 +15,7 @@ from .services import (
     accept_all_pending,
     bulk_add_items,
     clone_exhibit,
+    compute_exhibit_numbering,
     compute_section_numbering,
     create_blank_exhibit,
     flatten_section_items,
@@ -25,6 +26,7 @@ from .services import (
     reject_all_pending,
     save_as_template,
 )
+from .views import _apply_proposed_changes
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,60 @@ class TestComputeSectionNumbering:
         assert numbers[child1.pk] == '1.1'
         assert numbers[child2.pk] == '1.2'
         assert numbers[grandchild.pk] == '1.1.1'
+
+    def test_with_section_letter(self):
+        section = ExhibitSectionFactory()
+        parent = ScopeItemFactory(section=section, order=0)
+        child = ScopeItemFactory(section=section, parent=parent, level=1, order=0)
+        numbers = compute_section_numbering(section, section_letter='B')
+        assert numbers[parent.pk] == 'B.1'
+        assert numbers[child.pk] == 'B.1.1'
+
+    def test_section_letter_none_is_backward_compatible(self):
+        section = ExhibitSectionFactory()
+        item = ScopeItemFactory(section=section, order=0)
+        numbers = compute_section_numbering(section, section_letter=None)
+        assert numbers[item.pk] == '1'
+
+
+@pytest.mark.django_db
+class TestComputeExhibitNumbering:
+    def test_assigns_letters_to_sections(self):
+        exhibit = ScopeExhibitFactory()
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        s2 = ExhibitSectionFactory(scope_exhibit=exhibit, order=1)
+        s3 = ExhibitSectionFactory(scope_exhibit=exhibit, order=2)
+        _numbers, section_letters = compute_exhibit_numbering(exhibit)
+        assert section_letters[s1.pk] == 'A'
+        assert section_letters[s2.pk] == 'B'
+        assert section_letters[s3.pk] == 'C'
+
+    def test_items_have_letter_prefix(self):
+        exhibit = ScopeExhibitFactory()
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        s2 = ExhibitSectionFactory(scope_exhibit=exhibit, order=1)
+        item_a = ScopeItemFactory(section=s1, order=0)
+        item_b1 = ScopeItemFactory(section=s2, order=0)
+        item_b2 = ScopeItemFactory(section=s2, order=1)
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        assert numbers[item_a.pk] == 'A.1'
+        assert numbers[item_b1.pk] == 'B.1'
+        assert numbers[item_b2.pk] == 'B.2'
+
+    def test_nested_items_across_sections(self):
+        exhibit = ScopeExhibitFactory()
+        s1 = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        parent = ScopeItemFactory(section=s1, order=0)
+        child = ScopeItemFactory(section=s1, parent=parent, level=1, order=0)
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        assert numbers[parent.pk] == 'A.1'
+        assert numbers[child.pk] == 'A.1.1'
+
+    def test_empty_exhibit(self):
+        exhibit = ScopeExhibitFactory()
+        numbers, section_letters = compute_exhibit_numbering(exhibit)
+        assert numbers == {}
+        assert section_letters == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +1336,20 @@ class TestAIChatView:
         response = client.get(url)
         assert response.status_code == 404
 
+    def test_messages_loaded_on_chat_open(self, client):
+        from ai_services.models import ChatMessage, ChatSession
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatMessage.objects.create(session=session, role='user', content='Hello from DB')
+        ChatMessage.objects.create(session=session, role='assistant', content='Hi back from DB')
+        url = reverse('exhibits:ai_chat', args=[exhibit.pk])
+        response = client.get(url)
+        assert response.status_code == 200
+        assert b'Hello from DB' in response.content
+        assert b'Hi back from DB' in response.content
+
 
 # ---------------------------------------------------------------------------
 # AI chat send view
@@ -1300,7 +1370,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'Got it!', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Hello', 'history': '[]'})
+            response = client.post(url, {'message': 'Hello'})
         assert response.status_code == 200
         assert b'Hello' in response.content
         assert b'Got it!' in response.content
@@ -1315,7 +1385,7 @@ class TestAIChatSendView:
             ],
         }
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Add fire stopping', 'history': '[]'})
+            response = client.post(url, {'message': 'Add fire stopping'})
         assert response.status_code == 200
         item = ScopeItem.objects.get(section=section, text='Provide fire stopping.')
         assert item.is_pending_review is True
@@ -1331,7 +1401,7 @@ class TestAIChatSendView:
             ],
         }
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Add X', 'history': '[]'})
+            response = client.post(url, {'message': 'Add X'})
         assert response['HX-Trigger'] == 'pendingChanged'
 
     def test_edit_change_sets_pending_fields(self, client):
@@ -1345,7 +1415,7 @@ class TestAIChatSendView:
             ],
         }
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'Edit item', 'history': '[]'})
+            response = client.post(url, {'message': 'Edit item'})
         assert response.status_code == 200
         item.refresh_from_db()
         assert item.text == 'Revised text.'
@@ -1357,7 +1427,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'No changes needed.', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            response = client.post(url, {'message': 'How does this look?', 'history': '[]'})
+            response = client.post(url, {'message': 'How does this look?'})
         assert response.status_code == 200
         assert 'HX-Trigger' not in response
 
@@ -1366,32 +1436,68 @@ class TestAIChatSendView:
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         with patch('exhibits.views.chat_with_exhibit', side_effect=AIServiceError('timeout')):
-            response = client.post(url, {'message': 'Hello', 'history': '[]'})
+            response = client.post(url, {'message': 'Hello'})
         assert response.status_code == 200
         assert b'timeout' in response.content
 
     def test_empty_message_returns_empty_response(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        response = client.post(url, {'message': '', 'history': '[]'})
+        response = client.post(url, {'message': ''})
         assert response.status_code == 200
         assert response.content == b''
 
     def test_history_is_passed_to_service(self, client):
+        """Prior DB messages are included in conversation sent to AI."""
+        from ai_services.models import ChatMessage, ChatSession
         user, exhibit, section = self._setup(client)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatMessage.objects.create(session=session, role='user', content='Earlier message')
+        ChatMessage.objects.create(session=session, role='assistant', content='Earlier reply')
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        prior_history = [
-            {'role': 'user', 'content': 'Earlier message'},
-            {'role': 'assistant', 'content': 'Earlier reply'},
-        ]
-        import json
         result = {'message': 'Response.', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'New message', 'history': json.dumps(prior_history)})
+            client.post(url, {'message': 'New message'})
         call_args = mock_chat.call_args[0]
         conversation = call_args[1]
         assert conversation[0]['content'] == 'Earlier message'
+        assert conversation[1]['content'] == 'Earlier reply'
         assert conversation[2]['content'] == 'New message'
+
+    def test_messages_persisted_to_db(self, client):
+        """Sending a message creates both user and assistant ChatMessage records."""
+        from ai_services.models import ChatMessage, ChatSession
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {'message': 'AI response here.', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            client.post(url, {'message': 'User says hello'})
+        session = ChatSession.objects.get(exhibit=exhibit)
+        messages = list(session.messages.order_by('created_at'))
+        assert len(messages) == 2
+        assert messages[0].role == 'user'
+        assert messages[0].content == 'User says hello'
+        assert messages[0].user == user
+        assert messages[1].role == 'assistant'
+        assert messages[1].content == 'AI response here.'
+        assert messages[1].user is None
+
+    def test_conversation_persists_across_requests(self, client):
+        """Multiple sends accumulate in DB and full history is passed to AI."""
+        from ai_services.models import ChatMessage, ChatSession
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result1 = {'message': 'Reply 1', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result1):
+            client.post(url, {'message': 'Message 1'})
+        result2 = {'message': 'Reply 2', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result2) as mock_chat:
+            client.post(url, {'message': 'Message 2'})
+        conversation = mock_chat.call_args[0][1]
+        assert len(conversation) == 3
+        assert conversation[0] == {'role': 'user', 'content': 'Message 1'}
+        assert conversation[1] == {'role': 'assistant', 'content': 'Reply 1'}
+        assert conversation[2] == {'role': 'user', 'content': 'Message 2'}
 
     def test_company_isolation(self, client):
         user_b = PMUserFactory()
@@ -1399,7 +1505,7 @@ class TestAIChatSendView:
         user_a = PMUserFactory()
         _, exhibit = _make_trade_with_exhibit(user_a)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        response = client.post(url, {'message': 'Hello', 'history': '[]'})
+        response = client.post(url, {'message': 'Hello'})
         assert response.status_code == 404
 
     def test_requires_post(self, client):
@@ -1417,7 +1523,6 @@ class TestAIChatSendView:
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
             client.post(url, {
                 'message': 'Add seismic bracing.',
-                'history': '[]',
                 'context_section_pks': [section.pk],
             })
         conversation = mock_chat.call_args[0][1]
@@ -1440,7 +1545,6 @@ class TestAIChatSendView:
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
             client.post(url, {
                 'message': 'Convert this note.',
-                'history': '[]',
                 'context_note_pks': [note.pk],
             })
         conversation = mock_chat.call_args[0][1]
@@ -1451,7 +1555,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'OK', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'Hello', 'history': '[]'})
+            client.post(url, {'message': 'Hello'})
         conversation = mock_chat.call_args[0][1]
         assert conversation[0]['content'] == 'Hello'
 
@@ -1636,3 +1740,577 @@ class TestItemAddMultiLine:
         assert new_item.text == 'Single item'
         assert new_item.level == 0
         assert not new_item.is_pending_review
+
+
+# ---------------------------------------------------------------------------
+# Pending delete: services
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestPendingDeleteServices:
+
+    def _make_pending_delete(self, user, exhibit):
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        item = ScopeItemFactory(
+            section=section, text='Item to delete',
+            is_pending_review=True, pending_delete=True,
+            created_by=user,
+        )
+        return section, item
+
+    def test_accept_pending_delete_actually_deletes(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, item = self._make_pending_delete(user, exhibit)
+        pk = item.pk
+        accept_ai_item(item)
+        assert not ScopeItem.objects.filter(pk=pk).exists()
+
+    def test_accept_pending_delete_also_deletes_descendants(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit)
+        parent = ScopeItemFactory(
+            section=section, text='Parent', level=0,
+            is_pending_review=True, pending_delete=True, created_by=user,
+        )
+        child = ScopeItemFactory(
+            section=section, parent=parent, text='Child', level=1,
+            created_by=user,
+        )
+        accept_ai_item(parent)
+        assert not ScopeItem.objects.filter(pk=parent.pk).exists()
+        assert not ScopeItem.objects.filter(pk=child.pk).exists()
+
+    def test_reject_pending_delete_restores_item(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, item = self._make_pending_delete(user, exhibit)
+        reject_ai_item(item)
+        item.refresh_from_db()
+        assert item.is_pending_review is False
+        assert item.pending_delete is False
+        assert item.text == 'Item to delete'
+
+    def test_accept_all_handles_pending_deletes(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, delete_item = self._make_pending_delete(user, exhibit)
+        delete_pk = delete_item.pk
+        # Also add a normal pending edit
+        section2 = ExhibitSectionFactory(scope_exhibit=exhibit)
+        edit_item = ScopeItemFactory(
+            section=section2, text='Edited', pending_original_text='Original',
+            is_pending_review=True, created_by=user,
+        )
+        accept_all_pending(exhibit)
+        assert not ScopeItem.objects.filter(pk=delete_pk).exists()
+        edit_item.refresh_from_db()
+        assert edit_item.is_pending_review is False
+
+    def test_reject_all_handles_pending_deletes(self):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        _, delete_item = self._make_pending_delete(user, exhibit)
+        reject_all_pending(exhibit)
+        delete_item.refresh_from_db()
+        assert delete_item.is_pending_review is False
+        assert delete_item.pending_delete is False
+
+
+# ---------------------------------------------------------------------------
+# Pending delete: view (_apply_proposed_changes)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestApplyChangesDelete:
+
+    def test_delete_action_sets_pending_not_immediate_delete(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        item = ScopeItemFactory(section=section, text='Existing item', created_by=user)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {
+            'message': '',
+            'proposed_changes': [
+                {'action': 'delete', 'target_item_pk': item.pk}
+            ],
+        }
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            response = client.post(url, {'message': 'Delete that item'})
+        assert response.status_code == 200
+        item.refresh_from_db()
+        assert item.is_pending_review is True
+        assert item.pending_delete is True
+
+    def test_tool_only_response_generates_fallback_message(self, client):
+        """When Claude returns only tool calls (no text), a meaningful fallback is saved."""
+        from ai_services.models import ChatMessage, ChatSession
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        result = {
+            'message': '',
+            'proposed_changes': [
+                {'action': 'add', 'section_name': 'Scope of Work', 'text': 'New item.', 'level': 0}
+            ],
+        }
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            response = client.post(url, {'message': 'Add an item'})
+        assert response.status_code == 200
+        session = ChatSession.objects.get(exhibit=exhibit)
+        assistant_msg = session.messages.filter(role='assistant').first()
+        assert 'Done' in assistant_msg.content
+        assert '1 change' in assistant_msg.content
+        assert 'Sorry' not in assistant_msg.content
+
+
+# ---------------------------------------------------------------------------
+# _apply_proposed_changes: parent targeting via parent_item_pk
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestApplyChangesAddParent:
+
+    def test_add_with_parent_pk_nests_correctly(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        parent_item = ScopeItemFactory(
+            section=section, text='Parent item', level=0, order=0, parent=None,
+            created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Child under parent.',
+            'level': 1,
+            'parent_item_pk': parent_item.pk,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        child = ScopeItem.objects.get(text='Child under parent.')
+        assert child.parent == parent_item
+        assert child.level == 1
+
+    def test_add_with_parent_pk_after_existing_children(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        parent_item = ScopeItemFactory(
+            section=section, text='Parent', level=0, order=0, parent=None,
+            created_by=user,
+        )
+        ScopeItemFactory(
+            section=section, text='Existing child', level=1, order=0,
+            parent=parent_item, created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Second child.',
+            'level': 1,
+            'parent_item_pk': parent_item.pk,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        new_child = ScopeItem.objects.get(text='Second child.')
+        assert new_child.parent == parent_item
+        assert new_child.order == 1  # after existing child at order=0
+
+    def test_add_with_invalid_parent_pk_falls_back(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        fallback_parent = ScopeItemFactory(
+            section=section, text='Fallback parent', level=0, order=0, parent=None,
+            created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'Child with bad pk.',
+            'level': 1,
+            'parent_item_pk': 99999,  # nonexistent
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        child = ScopeItem.objects.get(text='Child with bad pk.')
+        assert child.parent == fallback_parent  # fell back to last level-0 item
+
+    def test_add_without_parent_pk_backward_compat(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        top_item = ScopeItemFactory(
+            section=section, text='Top item', level=0, order=0, parent=None,
+            created_by=user,
+        )
+
+        changes = [{
+            'action': 'add',
+            'section_name': 'Scope of Work',
+            'text': 'New top-level item.',
+            'level': 0,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        new_item = ScopeItem.objects.get(text='New top-level item.')
+        assert new_item.parent is None
+        assert new_item.level == 0
+
+
+# ---------------------------------------------------------------------------
+# Section rewrite view
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSectionRewriteView:
+    def test_rewrites_items_as_pending(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        item1 = ScopeItemFactory(section=section, text='Original 1.', order=0, created_by=user)
+        item2 = ScopeItemFactory(section=section, text='Original 2.', order=1, created_by=user)
+
+        import json
+        mock_return = [
+            {'pk': item1.pk, 'exhibit_text': 'Rewritten 1.'},
+            {'pk': item2.pk, 'exhibit_text': 'Rewritten 2.'},
+        ]
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.rewrite_section_items', return_value=mock_return):
+            response = client.post(url, {'instruction': 'convert to subcontract'})
+
+        assert response.status_code == 200
+        item1.refresh_from_db()
+        item2.refresh_from_db()
+        assert item1.text == 'Rewritten 1.'
+        assert item1.pending_original_text == 'Original 1.'
+        assert item1.is_pending_review is True
+        assert item2.text == 'Rewritten 2.'
+        assert 'pendingChanged' in response.get('HX-Trigger', '')
+
+    def test_empty_instruction_returns_without_changes(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': ''})
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_ai_failure_leaves_items_unchanged(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        from ai_services.services import AIServiceError
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.rewrite_section_items', side_effect=AIServiceError('fail')):
+            response = client.post(url, {'instruction': 'rewrite'})
+
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_company_scoping(self, client):
+        user = PMUserFactory()
+        other_user = PMUserFactory()
+        _login(client, other_user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': 'rewrite'})
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Section AI unified view
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSectionAIView:
+    def test_adds_item_via_tool(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+
+        mock_changes = [{'action': 'add', 'section_name': 'Scope', 'text': 'New AI item.', 'level': 0}]
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.section_ai_action', return_value=mock_changes):
+            response = client.post(url, {'instruction': 'add an exclusion for drywall'})
+
+        assert response.status_code == 200
+        item = ScopeItem.objects.get(section=section)
+        assert item.text == 'New AI item.'
+        assert item.is_pending_review is True
+        assert 'pendingChanged' in response.get('HX-Trigger', '')
+
+    def test_edits_existing_item_via_tool(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        item = ScopeItemFactory(section=section, text='Original text.', order=0, created_by=user)
+
+        mock_changes = [{'action': 'edit', 'target_item_pk': item.pk, 'text': 'Edited text.', 'level': 0}]
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.section_ai_action', return_value=mock_changes):
+            response = client.post(url, {'instruction': 'rewrite in subcontract language'})
+
+        assert response.status_code == 200
+        item.refresh_from_db()
+        assert item.text == 'Edited text.'
+        assert item.pending_original_text == 'Original text.'
+        assert item.is_pending_review is True
+
+    def test_empty_instruction_no_changes(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': ''})
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_ai_failure_no_changes(self, client):
+        from ai_services.services import AIServiceError
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.section_ai_action', side_effect=AIServiceError('fail')):
+            response = client.post(url, {'instruction': 'rewrite everything'})
+
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_company_scoping(self, client):
+        user = PMUserFactory()
+        other_user = PMUserFactory()
+        _login(client, other_user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        url = reverse('exhibits:section_ai', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': 'add item'})
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Note-to-scope AI conversion view
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestNoteToScopeAIView:
+    def _make_note_for_exhibit(self, exhibit, user):
+        trade = Trade.objects.filter(
+            project=exhibit.project, csi_trade=exhibit.csi_trade,
+        ).first()
+        if not trade:
+            trade = TradeFactory(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        return NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Sub needs to demo existing ceilings.',
+            created_by=user,
+        )
+
+    def test_created_makes_pending_item_and_resolves_note(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        note = self._make_note_for_exhibit(exhibit, user)
+
+        mock_result = {
+            'status': 'created',
+            'section_name': 'Scope of Work',
+            'exhibit_text': 'Demolish existing ceiling tile and grid in designated rooms.',
+        }
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        with patch('exhibits.views.convert_note_to_scope', return_value=mock_result):
+            response = client.post(url)
+
+        assert response.status_code == 200
+        assert 'pendingChanged' in response.get('HX-Trigger', '')
+
+        # Check scope item was created
+        item = ScopeItem.objects.get(section=section)
+        assert item.text == 'Demolish existing ceiling tile and grid in designated rooms.'
+        assert item.is_pending_review is True
+        assert item.is_ai_generated is True
+
+        # Check note was resolved
+        note.refresh_from_db()
+        assert note.status == Note.Status.RESOLVED
+        assert 'Converted to scope item' in note.resolution
+        assert note.scope_item == item
+
+    def test_overlap_returns_overlap_template(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        existing_item = ScopeItemFactory(
+            section=section, text='Demo ceilings.', order=0, created_by=user,
+        )
+        note = self._make_note_for_exhibit(exhibit, user)
+
+        mock_result = {
+            'status': 'overlap',
+            'overlap_item_pk': existing_item.pk,
+            'explanation': 'Item already covers ceiling demo.',
+        }
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        with patch('exhibits.views.convert_note_to_scope', return_value=mock_result):
+            response = client.post(url)
+
+        assert response.status_code == 200
+        content = response.content.decode()
+        assert 'Possible Overlap' in content
+        assert 'already covers ceiling demo' in content
+        # Note should NOT be resolved
+        note.refresh_from_db()
+        assert note.status == Note.Status.OPEN
+
+    def test_already_resolved_note_returns_error(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        note = self._make_note_for_exhibit(exhibit, user)
+        note.status = Note.Status.RESOLVED
+        note.save(update_fields=['status'])
+
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        response = client.post(url)
+        assert response.status_code == 200
+        assert 'already resolved' in response.content.decode()
+
+    def test_section_name_fallback(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='General', order=0)
+        note = self._make_note_for_exhibit(exhibit, user)
+
+        mock_result = {
+            'status': 'created',
+            'section_name': 'Nonexistent Section',
+            'exhibit_text': 'Some scope item.',
+        }
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        with patch('exhibits.views.convert_note_to_scope', return_value=mock_result):
+            response = client.post(url)
+
+        assert response.status_code == 200
+        # Should have fallen back to first section
+        assert ScopeItem.objects.filter(section=section).exists()
+
+    def test_company_scoping(self, client):
+        user = PMUserFactory()
+        other_user = PMUserFactory()
+        _login(client, other_user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        note = NoteFactory(
+            project=exhibit.project,
+            primary_trade=trade,
+            text='Test note.',
+            created_by=user,
+        )
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        response = client.post(url)
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# _apply_proposed_changes: convert_note action
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestApplyProposedChangesConvertNote:
+    def test_convert_note_creates_item_and_resolves_note(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        note = NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Add dumpster language.', created_by=user,
+        )
+
+        changes = [{
+            'action': 'convert_note',
+            'note_pk': note.pk,
+            'section_name': 'Scope of Work',
+            'text': 'Provide and coordinate all dumpster removal.',
+            'level': 0,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        item = ScopeItem.objects.get(pk=applied_pks[0])
+        assert item.is_pending_review is True
+        assert item.is_ai_generated is True
+        assert item.original_input == 'Add dumpster language.'
+
+        note.refresh_from_db()
+        assert note.status == Note.Status.RESOLVED
+        assert note.scope_item == item
+        assert 'Converted to scope item by AI' in note.resolution
+
+    def test_skips_already_resolved_note(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        note = NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Already done.', created_by=user,
+            status=Note.Status.RESOLVED,
+        )
+
+        changes = [{
+            'action': 'convert_note',
+            'note_pk': note.pk,
+            'section_name': 'Scope of Work',
+            'text': 'Some text.',
+            'level': 0,
+        }]
+        applied, _ = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 0

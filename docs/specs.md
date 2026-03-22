@@ -717,74 +717,88 @@ The data model supports these critical views:
 
 ### AI Service Layer
 
-The AI integration is isolated in a service module (`ai_services/services.py`) with the following functions:
+The AI integration is isolated in `ai_services/` and gated by the `AI_ENABLED` setting. Every exhibit workflow works without AI.
+
+**Architecture: "one AI brain, multiple entry points"** — The chat is the full-flexibility interface with all tools available. AI icons throughout the UI (sections, items, notes) are pre-scoped shortcuts into the same service layer. Each icon opens a text input for quick instructions. All AI-generated changes go through the pending review workflow.
+
+#### Service Functions (`ai_services/services.py`)
 
 ```python
-# Function 1: Scope description → exhibit language (bulk generation)
-def generate_scope_from_description(exhibit) -> dict:
-    """
-    Builds user prompt from exhibit.csi_trade, project type, project description,
-    exhibit.scope_description, and existing sections/items for context.
-    Asks Claude to check if the exhibit already covers the scope description before
-    generating more — prevents duplicate/redundant items.
+# Bulk generation: scope description → structured exhibit sections + items
+def generate_scope_from_description(exhibit) -> dict
 
-    Returns:
-    {
-        "scope_items": [              # Suggested ScopeItems organized by section
-            {
-                "section_name": "General Scope of Work",
-                "items": [
-                    {"text": "...", "level": 0},
-                    {"text": "...", "level": 1},
-                ]
-            },
-            ...
-        ],
-    }
-    Items are created with is_ai_generated=True and is_pending_review=True so the PM
-    can review and accept/reject each one before they become part of the exhibit.
-    """
+# Single item: natural language → polished scope item text
+def generate_scope_item(input_text, exhibit, section) -> str
 
-# Function 2: Natural language → scope item (per-section, single item)
-def generate_scope_item(input_text: str, exhibit, section) -> str:
-    """
-    Sends the PM's plain-language note plus trade/section context.
-    Asks Claude to rewrite as a single polished exhibit line.
-    Returns the standardized text string.
-    Item created with is_ai_generated=True and is_pending_review=True.
-    """
+# Rewrite: existing item + instruction → proposed new text
+def rewrite_scope_item(item, exhibit, instruction='') -> str
 
-# Function 3: Rewrite an existing scope item
-def rewrite_scope_item(item, exhibit, instruction: str = '') -> str:
-    """
-    Takes an existing ScopeItem and an optional instruction (e.g., "make more specific",
-    "add reference to drawing"). Returns proposed new text.
-    Caller sets item.is_pending_review=True, item.pending_original_text=item.text,
-    item.text=proposed_text.
-    """
+# Expand: parent item → list of sub-items
+def expand_scope_item(item, exhibit) -> list[dict]
 
-# Function 4: Expand a scope item into sub-items
-def expand_scope_item(item, exhibit) -> list[dict]:
-    """
-    Takes a top-level or parent scope item and returns a list of suggested child items:
-    [{"text": "...", "level": item.level + 1}, ...]
-    Sub-items created with is_ai_generated=True and is_pending_review=True.
-    """
+# Section AI: free-form instruction scoped to one section → add/edit/delete changes
+# Uses Claude tool use API — AI decides the action from the instruction
+def section_ai_action(section, exhibit, instruction) -> list[dict]
 
-# Function 5: Exhibit-level conversational AI
-def chat_with_exhibit(exhibit, conversation_history: list[dict]) -> dict:
-    """
-    Takes the full conversation history (list of {role, content} dicts) and the
-    current exhibit state. Returns a response that may include:
-    - conversational text (assistant message to display)
-    - proposed_changes: list of item-level changes to queue as pending review
-      Each change: {action: "add"|"edit"|"delete", section_name, item_text, level,
-                    target_item_pk (for edit/delete)}
+# Bulk rewrite: all items in a section rewritten with one instruction
+def rewrite_section_items(section, exhibit, instruction) -> list[dict]
 
-    Proposed changes are applied with is_pending_review=True so the PM can
-    accept/reject them after the chat session ends.
-    """
+# Note conversion: note → scope item with overlap detection against existing items
+def convert_note_to_scope(note, exhibit, instruction='') -> dict
+
+# Completeness check: identify gaps in scope coverage
+def check_exhibit_completeness(exhibit) -> dict
+
+# Conversational chat: multi-turn conversation with tool use
+def chat_with_exhibit(exhibit, messages) -> dict
 ```
+
+#### Chat Infrastructure
+
+- **Server-side history**: `ChatSession` + `ChatMessage` models persist conversations across page reloads. One session per exhibit, created on first chat open.
+- **Structured context**: `_build_structured_chat_context()` builds a JSON snapshot of the exhibit state — items with PKs, refs (A.1, A.1.1), hierarchy, pending status, and open notes. Injected into every chat API call.
+- **Claude tool use API**: Chat uses `_call_claude_with_tools()` with four tools:
+  - `add_scope_item` — add new item to a section (by name)
+  - `edit_scope_item` — edit existing item (by PK)
+  - `delete_scope_item` — delete existing item (by PK)
+  - `convert_note_to_scope` — convert a note into a scope item (by note PK)
+- **`_apply_proposed_changes()`** in views handles all tool-generated changes uniformly — creates pending items, sets diffs, resolves notes.
+
+#### AI Models
+
+```
+AIRequestLog
+├── request_type: SCOPE_FROM_DESCRIPTION | SCOPE_ITEM | REWRITE_ITEM | EXPAND_ITEM |
+│                 CHAT | COMPLETENESS_CHECK | REWRITE_SECTION | NOTE_TO_SCOPE
+├── exhibit (FK → ScopeExhibit, nullable)
+├── success: boolean
+├── error_message: text (blank)
+├── tokens_used: int (nullable)
+├── latency_ms: int (nullable)
+└── created_at
+
+ChatSession
+├── exhibit (FK → ScopeExhibit, nullable)
+├── user (FK → User)
+├── context_type: default 'exhibit'
+├── created_at
+└── updated_at
+
+ChatMessage
+├── session (FK → ChatSession)
+├── role: 'user' | 'assistant'
+├── content: text
+├── user (FK → User, nullable — null for assistant)
+├── tokens_used: int (nullable)
+└── created_at
+```
+
+#### Prompt Strategy
+
+System prompts in `ai_services/prompts.py` include:
+- Shared `_LANGUAGE_RULES` (capitalize trade names, use "provide and install", reference drawings as "per the Contract Documents", imperative mood)
+- Function-specific instructions and output format requirements
+- Trade/project/section context injected at call time
 
 **Pending review workflow** (applies to all AI-generated suggestions):
 1. AI functions create or modify `ScopeItem` records with `is_pending_review=True`
@@ -805,50 +819,43 @@ def chat_with_exhibit(exhibit, conversation_history: list[dict]) -> dict:
 
 ### AI Assistant UX
 
-The AI is surfaced through three entry points in the scope editor, all using the ✨ icon:
+The AI is surfaced through multiple entry points in the scope editor, all using the ✨ icon:
 
-#### 1. Scope Description AI (existing — bulk generation)
+#### 1. Scope Description AI (bulk generation)
 - ✨ button in the scope description card (editor header area)
 - Triggers `generate_scope_from_description()` — generates sections + items from the description
 - All generated items created as `is_pending_review=True` for batch review
-- Completeness check first: if exhibit already has substantial content matching the description, AI acknowledges it rather than generating duplicates
+- Gap-fill mode: if exhibit already has substantial content (≥5 items), AI identifies missing items rather than regenerating everything
 
-#### 2. Chat Side Panel (contextual quick actions + conversation)
-- Slides in from the right side of the editor; toggled via "Chat with AI ✨" button in the editor header
-- Layout (top to bottom): header, Quick Actions bar, chat messages area, input area
-- **Quick Actions bar** (`#ai-quick-panel`): slim horizontal bar below the header, context-sensitive:
-  - **No selection**: "Check exhibit completeness" button
-  - **Item selected/focused**: "Rewrite this item" (with optional instruction field), "Expand into sub-items", "← Back to AI panel"
-- **Chat messages area** (`#chat-messages`): scrollable message history with user/assistant bubbles
-  - PM can have a multi-turn conversation: "Add a section about coordination with the electrical contractor", "The project has a raised floor — update the scope to reflect that"
-  - Each AI response may propose changes (new items, edits, deletions) queued as pending
-  - Completeness check results also render here as an assistant-style bubble (see below)
-- **Input area**: textarea with context chip picker (attach sections/notes as context), Send button
-- Chat history is session-only (not persisted to DB)
+#### 2. Section AI (unified section-level action)
+- ✨ icon in section header (visible on hover) — opens a popover with a single text input
+- PM types any instruction: "add an exclusion for GC work", "rewrite in subcontract language", "expand the first item"
+- AI determines the action (add, edit, delete, or any combination) via tool use API
+- All changes created as pending review items
+
+#### 3. Item AI (per-item rewrite + expand)
+- ✨ icon on each scope item (visible on hover) — opens an inline popover
+- "Rewrite" with optional instruction text input
+- "Expand into sub-items" button
+- Both create pending review items
+
+#### 4. Note-to-Scope Conversion
+- ✨ icon on each open note card — opens an inline form (bottom of card)
+- Checks for overlap against existing scope items before creating
+- If overlap detected: shows overlap banner with "Edit Existing Item" / "Add New Anyway" / dismiss options
+- If no overlap: creates pending scope item and auto-resolves the note
+- Also available via chat tool for batch conversion ("convert all notes to scope")
+
+#### 5. Chat Side Panel (conversation + all tools)
+- "Chat with AI ✨" button in the editor header expands the right panel to 45vw
+- Layout (top to bottom): header, collapsible Quick Actions (completeness check), chat messages area, input area
+- **Chat messages**: scrollable history with user/assistant bubbles. Conversations persist server-side (`ChatSession` + `ChatMessage` models) — resumable across page reloads
+- **Input area**: textarea with context chip picker (`+` button to attach sections/notes as context), Send button
+- **Tool use**: AI can add/edit/delete items and convert notes to scope via Claude tool use API. All changes applied as pending review
+- **Completeness check**: results render as a chat-style bubble with actionable gap cards ("+ Add to {section}" / "✕ Dismiss")
 - HTMX patterns:
-  - Chat send: `hx-post` with conversation history → server calls Claude → returns assistant message + applies pending changes → appends to `#chat-messages`
-  - Rewrite/Expand: `hx-post` → server calls Claude → returns updated item partial + resets Quick Actions panel
-
-#### Completeness Check UX
-- Button lives in the Quick Actions bar (visible when no item is selected)
-- Results render as a chat message bubble appended to `#chat-messages` (not inline in Quick Actions)
-  - `hx-target="#chat-messages"` + `hx-swap="beforeend scroll:#chat-messages:bottom"`
-- This ensures results are scrollable (chat area has `overflow-y-auto`) and feel like a natural part of the conversation flow
-- Each gap card (amber background) shows the suggested text, reason, and two actions:
-  - **"+ Add to {section}"**: `hx-post` → creates a pending `ScopeItem` → card text replaced with "✓ Added to {section}"
-  - **"✕ Dismiss"**: client-side removal, card text replaced with "Dismissed" (no backend call)
-- Both actions replace the card content in-place — other gap cards remain visible and actionable
-- If no gaps found: green "Scope looks complete" message
-- If AI fails: red error text
-
-#### 3. Full-Screen Chat Overlay (exhibit-level conversation)
-- "Chat with AI ✨" button in the editor header opens a full-screen overlay
-- Same conversational interface as the side panel but with more screen space (centered, max-width container)
-- PM can have a multi-turn conversation with full chat history
-- Each AI response may propose changes (new items, edits, deletions) queued as pending
-- PM exits the overlay by closing it; pending changes remain in the editor for review
-- Chat history is session-only (not persisted to DB)
-- HTMX pattern: `hx-post` with conversation history in body → server calls Claude → returns assistant message + applies pending changes → returns updated overlay + pending banner
+  - Chat send: `hx-post` → server loads history from DB, calls Claude with tools → saves messages to DB → returns assistant message partial → appends to chat area
+  - Section list auto-refreshes when chat panel closes
 
 #### Pending Banner
 - Shown in the editor header when `exhibit.sections.items.filter(is_pending_review=True).exists()`
@@ -908,13 +915,13 @@ The UI is server-rendered HTML with HTMX for dynamic behavior — no JavaScript 
 | Add note from sidebar | `hx-post` → creates Note → returns updated notes list partial |
 | Add note linked to scope item | click comment icon → JS sets hidden `scope_item_id` field → same `hx-post` → note saved with scope_item FK → returns updated notes list |
 | AI: generate scope from description | `hx-post` → calls Claude API → creates items with `is_pending_review=True` → returns section list + pending banner (with loading indicator) |
-| AI: per-section item generation | `hx-post` → calls Claude API → creates item with `is_pending_review=True` → returns section item list + pending banner |
+| AI: section AI action | `hx-post` with instruction → calls Claude with tool use API → applies add/edit/delete changes as pending → returns section item list; fires `HX-Trigger: pendingChanged` |
 | AI: rewrite item | `hx-post` → calls Claude API → sets `is_pending_review=True`, `pending_original_text`, updates `text` → returns updated item partial (diff view) + pending banner |
 | AI: expand item into sub-items | `hx-post` → calls Claude API → creates child items with `is_pending_review=True` → returns section item list + pending banner |
+| AI: note-to-scope conversion | `hx-post` → calls Claude API → overlap check → returns overlap banner (with edit/add/dismiss) or creates pending item + resolves note → returns updated note card |
 | AI: completeness check | `hx-post` → calls Claude API → returns chat-bubble partial appended to `#chat-messages` with gap cards (accept/dismiss per card, client-side) |
 | AI: add gap item | `hx-post` → creates pending `ScopeItem` in target section → returns section item list; fires `HX-Trigger: pendingChanged`; card replaced with "✓ Added" in-place |
-| AI: chat send (side panel) | `hx-post` with conversation history → calls Claude API → applies proposed changes as pending → returns chat response appended to `#chat-messages` + pending banner |
-| AI: chat overlay | `hx-post` with conversation history → calls Claude API → applies proposed changes as pending → returns chat response + section list + pending banner |
+| AI: chat send (side panel) | `hx-post` → server loads history from DB, calls Claude with tools → saves messages to DB → applies proposed changes as pending → returns chat response appended to `#chat-messages` + pending banner |
 | AI: accept pending item | `hx-post` → clears pending fields → returns normal item partial; fires `HX-Trigger: pendingChanged` |
 | AI: reject pending item | `hx-post` → restores original or deletes item → returns item partial or empty; fires `HX-Trigger: pendingChanged` |
 | AI: accept all pending | `hx-post` → bulk clears pending on all items in exhibit → returns section list + clears banner |
@@ -968,6 +975,7 @@ The following features are **not in MVP** but the architecture is designed to su
   - **Flag missing scope**: compare scope description against the current exhibit and surface gaps (e.g., "You mentioned BMS integration but no scope item addresses controls coordination")
 - Implementation: additional Claude API calls that take the scope description + project description + current exhibit state and return suggestions. Displayed as a sidebar or inline suggestions the PM can accept/dismiss.
 - No data model changes needed — suggestions are transient (generated on demand, not stored)
+- See also: `## AI Architecture Roadmap` for the expanded AI capabilities plan (Phases 2 and 4)
 
 **5. Project Membership & Invitations**
 - MVP: all users in a company can see all projects (no access restrictions)
@@ -1028,205 +1036,88 @@ The following features are **not in MVP** but the architecture is designed to su
 
 ---
 
-## Development Phases / Milestones
+## Pending Implementation
 
-### Development Philosophy
+Everything below is not yet built. Use this section to develop the checklist in `docs/checklist.md` when starting new work.
 
-The plan is structured around one principle: **close the core value loop as fast as possible**.
+### Deployment Readiness
 
-The minimum viable loop is:
-```
-Create project → Pick template → Edit exhibit → Export PDF
-```
+Must-fix before production users.
 
-Everything else (notes, AI, final review) makes that loop better but isn't required. The goal is to reach a usable PDF output by **end of Week 5**, not Week 7, so you can start using the tool yourself immediately — even without notes, AI, or final review, this replaces the Word template workflow.
+- [ ] **Production security headers** — `SECURE_SSL_REDIRECT`, `SECURE_HSTS_SECONDS`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_REFERRER_POLICY`
+- [ ] **SECRET_KEY / DEBUG hardening** — Fail loudly if env vars missing in production
+- [ ] **Environment variable validation** — Refuse to start if `SECRET_KEY`, `DATABASE_URL`, `ALLOWED_HOSTS` missing
+- [ ] **Custom 404/500 error pages** — Branded templates instead of Django defaults
+- [ ] **Password reset email** — Configure real email backend (SendGrid, SES, or SMTP)
+- [ ] **Rate limiting on AI endpoints** — Per-user rate limits on AI views. Consider `django-ratelimit`
+- [ ] **Claude API timeout** — Explicit timeout (30-60s) with graceful handling
+- [ ] **Seed production data** — Management command for initial company, admin user, trade templates, checklist items
+- [ ] **Pilot launch onboarding** — 2-3 PMs + PEs, brief onboarding guide, weekly check-ins
 
----
+### AI Capabilities
 
-### Phase 1: Foundation + Data Models (Week 1)
+New AI-powered features. Each is standalone.
 
-**Rationale**: Merge project setup and data models into one task. There's no reason to separate "create the project skeleton" from "create the models" — they're one setup task. You won't ship anything between them.
+- [ ] **Cross-Trade Gap/Overlap Detection** — Analyze scopes across all trades in a project to find unassigned work and duplicate scope. Project-level view accessible from buyout dashboard. Findings convertible to Notes or ScopeItems
+- [ ] **Smart Template Ranking** — AI-ranked template recommendations based on scope description, project type, and template content
+- [ ] **Spec PDF Reading & Comparison** — Upload project spec PDFs, extract relevant trade sections, compare against current exhibit to flag deviations
+- [ ] **Accept/Reject Feedback Loop** — Track accept/reject signals per AI-generated item. Surface acceptance rate analytics. Feed curated examples into prompts
+- [ ] **Exhibit Comparison/Diff** — Compare two exhibits side-by-side to identify differences
+- [ ] **Scope Language Standardization Pass** — AI pass to normalize language across an entire exhibit
+- [ ] **Trade-Specific Knowledge Injection** — Domain knowledge per trade type injected into prompts
 
-**What's being built**:
-- Django project structure + all 5 apps (`core`, `projects`, `exhibits`, `notes`, `reviews`)
-- Settings configuration: PostgreSQL, django-allauth (email auth, no self-registration), HTMX, Tailwind CDN
-- Custom User model (email-based, company FK, role field) + Company model
-- **ALL data models** across all apps — get migrations done once
-  - Core: `Company`, `User`, `ProjectType`, `CSITrade`
-  - Projects: `Project`, `Trade`
-  - Exhibits: `ScopeExhibit`, `ExhibitSection`, `ScopeItem`
-  - Notes: `Note`
-  - Reviews: `ChecklistItem`, `FinalReview`, `FinalReviewItem`
-- Django admin configured for every model
-- Seed data command (CSI trades, project types)
-- Factory Boy factories for every model
-- Company-scoping mixin + role helpers
-- Base layout template (nav, flash messages, content block)
-- Pytest config + CI script
-- Model constraint tests
+### AI UX & Performance
 
-**Why all models upfront**: Django migrations are easier when you define your schema in one pass. Adding models later means dealing with migration dependencies across apps. The models are already fully designed in the architecture section — just implement them. The time cost is low and it prevents migration headaches later.
+- [ ] **Streaming Responses** — Stream chat and scope generation via SSE instead of waiting 5-15s
+- [ ] **Differentiated Error Messages** — Distinguish rate-limited, context-too-long, timeout, and unavailable errors
+- [ ] **Cost Visibility Dashboard** — Admin view showing AI usage metrics from `AIRequestLog`
+- [ ] **AI Result Caching** — Hash-based caching of read-only AI results with TTL and invalidation on exhibit writes
 
-**Exit criteria**: Auth works, all models migrated, admin can seed data, CI passes, factories create valid test data.
+### AI Prompt & Output Quality
 
----
+- [ ] **Few-Shot Examples in Prompts** — Add 2-3 concrete input/output examples to each system prompt
+- [ ] **Company-Configurable Language Rules** — `scope_language_rules` on Company model, injected into prompts alongside `_LANGUAGE_RULES`
+- [ ] **Project-Type-Specific Prompt Context** — Domain knowledge per ProjectType (e.g., lab TI → fume hoods, BMS integration)
 
-### Phase 2: Project Dashboard + Trade Setup (Week 2)
+### AI Agent Architecture (Future)
 
-**Rationale**: This is the entry point to the app — the first thing users see after login. Get the foundation of project management working before diving into the complex scope editor.
+- [ ] **Multi-Step Autonomous Scope Building** — Agent loop with human checkpoints at key decision points
+- [ ] **Context Window Management** — Token counting, summarization, exhibit context compression
+- [ ] **Tool Use Safety Layer** — Per-turn limits, confirmation for destructive actions, rate limiting per session
+- [ ] **Tool Result Formatting** — Standardized result format with actionable error guidance
+- [ ] **Enhanced Observability** — `AIToolCallLog` model tracking individual tool calls within a request
+- [ ] **Chat session cleanup** — Retention policy for accumulated sessions
 
-**What's being built**:
-- Project list view (company-scoped)
-- Project create/edit forms
-- Trade import: paste-based parser (CSI code + name + budget, one per line)
-- Manual single-trade add (CSI dropdown + budget)
-- Buyout dashboard: trades table grouped by status, stats bar
-- Trade status update via HTMX (dropdown → instant update)
-- Trade PE assignment via HTMX
-- Integration tests: company isolation, import parser edge cases
+### App Features (Post-MVP)
 
-**Key service**: `parse_trade_import()` — this needs to be robust. Handle tabs, commas, dollar signs, spaces in CSI codes, blank lines, duplicates. Write 8-10 test cases for this function alone.
+- [ ] **Drag-and-Drop Reordering** — Add Sortable.js (~2KB) alongside HTMX. Same backend endpoint, richer interaction
+- [ ] **Track Changes** — `ScopeItemHistory` model logging every edit. "Review Changes" view with diffs for PM approval
+- [ ] **Project Membership & Invitations** — `ProjectMember` through-table with roles (PM, PE, view-only)
+- [ ] **Blocking Review Workflow** — Final Review becomes a gate before `READY_FOR_BID`
+- [ ] **User-Submitted Checklist Items** — PMs submit ChecklistItems with approval workflow
+- [ ] **Additional Model Fields** — `Trade.spec_section`, `Trade.bid_due_date`, `Project.status` (ACTIVE/COMPLETED/ARCHIVED)
 
-**Exit criteria**: PM can create a project, paste 15+ trades from a spreadsheet, see a clean dashboard, update statuses — all without full page reloads.
+### App Quality of Life
 
----
+- [ ] **Confirmation dialogs on destructive actions** — JS confirm or modal before delete operations
+- [ ] **Project list search/filter** — Filter by name, number, status, assigned PM
+- [ ] **Finalized exhibit lock** — Read-only editor or explicit "unlock" action for finalized exhibits
+- [ ] **Application logging** — Loggers per app, user actions at INFO, errors at ERROR
+- [ ] **Loading state clarity** — Verify all AI actions have loading indicators, buttons disabled during requests
+- [ ] **Sentry context enrichment** — User/company breadcrumbs for debugging
+- [ ] **Pagination** — Project list, template picker, notes lists
+- [ ] **Audit trail** — `last_modified_by` + `modified_at` on key models. Consider `django-simple-history`
+- [ ] **User management UI** — In-app admin panel for company admins
+- [ ] **Concurrent edit warning** — "Last edited by X, Y minutes ago" with stale save warning
+- [ ] **Undo / soft delete** — "Recently deleted" recovery for scope items and sections
+- [ ] **Mobile/tablet responsiveness** — Sidebar layout adaptation for iPads
+- [ ] **Keyboard shortcuts** — Enter-to-save, Tab-to-next-item, Escape-to-cancel
+- [ ] **Health check endpoint** — `/health/` verifying DB connectivity
+- [ ] **Database backup strategy** — Verify and document recovery process
+- [ ] **Async PDF generation** — Background task for large exhibits
 
-### Phase 3: Scope Exhibit Editor (Weeks 3-4)
-
-**Rationale**: This is the core product and the most complex phase. **~40% of total development time**. The clone service's parent FK remapping and the indent/outdent cascade logic are the two hardest algorithms in the app. They need careful implementation and testing. Rushing this phase creates ordering bugs that corrupt exhibits.
-
-#### Week 3 — Template picker + clone + basic editor
-
-**What's being built**:
-- Template/past exhibit picker (filtered by CSI trade, sorted by project type match)
-- Clone service (deep copy with parent FK remapping — the trickiest piece of code in the app)
-- Create-blank-exhibit service (5 default sections)
-- Editor page layout: two-column (content left, sidebar right)
-- Section CRUD: add, rename, delete, reorder (HTMX)
-- Item CRUD: add (opens in edit mode), click-to-edit, delete (with descendants)
-
-#### Week 4 — Hierarchy + polish
-
-**What's being built**:
-- Item reordering: up/down with subtree integrity
-- Item indent/outdent with cascade to descendants
-- Hierarchical numbering (server-side computation: 1, 1.1, 1.1.1)
-- Scope description textarea (saved to DB — used by AI later)
-- Save-as-template flow
-- Exhibit status transitions (DRAFT → READY_FOR_REVIEW → READY_FOR_BID → FINALIZED) with Trade status sync
-- Thorough editor integration tests
-
-**Exit criteria**: Full editor workflow — pick template → clone → edit sections/items → reorder → indent/outdent → save. Hierarchical numbering correct after every operation. Status transitions work.
 
 ---
-
-### Phase 4: PDF Export (Week 5, first half)
-
-**Rationale**: **This is where the plan diverges from typical approaches.** PDF export is moved here (instead of bundling it late with Final Review) because:
-1. **It's simple** — HTML template + WeasyPrint is 6-8 hours of work
-2. **It closes the value loop** — after this phase, you have a genuinely usable tool that replaces the Word template workflow
-3. **You can start using it yourself immediately** — even without notes, AI, or final review
-4. **It's motivating** — seeing a real, professional PDF come out of your app is a huge morale boost mid-build
-
-**What's being built**:
-- PDF HTML template: professional exhibit layout (header, sections, hierarchical items, page numbers, company name)
-- Print CSS: `@page` rules, margins, typography
-- WeasyPrint service: `generate_exhibit_pdf()` → returns bytes
-- Download view: `Content-Disposition: attachment; filename="ExhibitA_HVAC_ProjectName.pdf"`
-- "Export PDF" button in editor footer
-- Test with varying exhibit sizes (1-page, 5-page, 10-page)
-
-**Exit criteria**: Clicking "Export PDF" downloads a clean, professional Exhibit A document. Tested at multiple sizes. Hierarchical numbering matches the editor display.
-
----
-
-### Phase 5: Notes & Cross-Trade Tracking (Week 5, second half + Week 6 first half)
-
-**Rationale**: Now we start layering on features that make the core loop better. The basic app works — notes add collaboration and context capture.
-
-**What's being built**:
-- Note model already exists from Phase 1 — now build the UI
-- Note creation form (primary trade + related trades + type + source)
-- Notes sidebar embedded in scope editor (loads via HTMX)
-- Cross-trade visibility: note tagged to HVAC + Electrical appears in both editors
-- Note resolution flow (resolve with text, update status)
-- Project-level open questions view (all unresolved questions across trades)
-- Open questions badge on buyout dashboard
-- Tests: cross-trade visibility, company isolation, resolution persistence
-
-**Exit criteria**: Notes appear in all relevant trade contexts. Open question count accurate. Resolve action persists correctly. Dashboard shows open question count.
-
----
-
-### Phase 6: AI Scope Assistant (Week 6, second half + Week 7 first half)
-
-**Rationale**: This is the "wow factor" feature but it's intentionally late because **the app must work perfectly without it**. AI is additive, not foundational.
-
-**What's being built**:
-- AI service layer: `generate_scope_from_description()` and `generate_scope_item()`
-- System prompts: exhibit language conventions, trade-specific context, JSON output schema
-- Response parsing with fallback on malformed JSON
-- Error handling: 30s timeout, 1 retry on 5xx, graceful failure message
-- Feature flag: `AI_ENABLED` setting — everything works if AI is off
-- `AIRequestLog` model for metrics (response time, tokens, success/failure — no prompt text stored)
-- Editor integration #1: scope description textarea → "Generate Scope" button → items inserted into sections
-- Editor integration #2: per-section natural language input → AI preview → accept/edit/reject
-- Tests with mocked API (no real API calls in tests)
-
-**Key design decision**: AI suggestions are inserted as regular `ScopeItems` with `is_ai_generated=True`. Once accepted, they're indistinguishable from manually created items. The PM edits them like anything else. No special "AI mode" — it's just a faster way to add items.
-
-**Exit criteria**: Both AI functions work end-to-end. Failures degrade gracefully. PM can complete any exhibit with or without AI. Metrics logged.
-
----
-
-### Phase 7: Final Review + Hardening + Launch (Weeks 7-8)
-
-**Rationale**: Combine the review feature with hardening and launch prep. The review is a quality layer — important but not the core product.
-
-#### Week 7: Final Review
-
-**What's being built**:
-- Review generation service: runs three checks (open notes, cross-trade notes, checklist items)
-- Review UI: checklist display with summary scorecard, PM response fields
-- "Run Final Review" button in editor
-- Informational only (warnings, not blockers) — PM can proceed regardless
-- Tests for review generation logic
-
-#### Week 8: Hardening + Pilot Launch
-
-**What's being built**:
-- Sentry error tracking
-- Query performance audit (N+1 queries, missing indexes)
-- Security audit: every view checked for auth + company isolation + role enforcement
-- Production deployment (Railway or Render): gunicorn, WhiteNoise, env vars, SSL
-- Seed production data: company, users, real trade templates (from existing Word docs), checklist items
-
-**Pilot launch**:
-- 2-3 PMs + their PEs
-- Brief onboarding guide (1-page, not a manual)
-- Weekly check-ins for 2-3 weeks
-- Track KPIs from Success Metrics section
-
-**Exit criteria**: No P0/P1 bugs. Production stable. Pilot users completing full workflow. Security audit passed.
-
----
-
-### Timeline Summary
-
-| Phase | Duration | Cumulative Weeks | Core Deliverable |
-|-------|----------|------------------|------------------|
-| Phase 1: Foundation + Data Models | Week 1 | Week 1 | All models, auth, CI setup |
-| Phase 2: Project Dashboard + Trade Setup | Week 2 | Week 2 | Project creation, trade import, dashboard |
-| Phase 3: Scope Exhibit Editor | Weeks 3-4 | Week 4 | Full editor with hierarchy, reordering, templates |
-| Phase 4: PDF Export | Week 5 (first half) | Week 5 | **Usable PDF output — core loop complete** |
-| Phase 5: Notes & Cross-Trade Tracking | Week 5-6 (1.5 weeks) | Week 6 | Collaboration features |
-| Phase 6: AI Scope Assistant | Week 6-7 (1.5 weeks) | Week 7 | AI-assisted scope generation |
-| Phase 7: Final Review + Hardening + Launch | Weeks 7-8 | Week 8 | Production-ready, pilot launched |
-
-**Total: 6-8 weeks** at ~20 hrs/week (114-160 hours total development time)
-
-**Key milestone**: End of Phase 4 (Week 5) — you have a working tool that replaces the Word template workflow. Everything after that makes it better.
-
 
 ## Time & Cost Estimates
 

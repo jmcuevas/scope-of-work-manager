@@ -3,7 +3,7 @@ from datetime import date
 
 from django.template.loader import render_to_string
 
-from exhibits.services import compute_section_numbering, flatten_section_items
+from exhibits.services import compute_exhibit_numbering, flatten_section_items
 
 
 def generate_exhibit_pdf(exhibit):
@@ -11,14 +11,15 @@ def generate_exhibit_pdf(exhibit):
     import weasyprint  # lazy import — system libs may not be present at startup
 
     sections = list(exhibit.sections.order_by('order'))
+    numbers, section_letters = compute_exhibit_numbering(exhibit)
     sections_data = []
     for section in sections:
         items = flatten_section_items(section)
-        numbers = compute_section_numbering(section)
         sections_data.append({
             'section': section,
             'items': items,
             'numbers': numbers,
+            'section_letter': section_letters.get(section.pk, ''),
         })
 
     html_string = render_to_string('exports/exhibit_pdf.html', {

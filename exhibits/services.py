@@ -4,11 +4,13 @@ from django.db import transaction
 from .models import ScopeExhibit, ExhibitSection, ScopeItem
 
 
-def compute_section_numbering(section):
+def compute_section_numbering(section, section_letter=None):
     """
     Returns {item_pk: "1.2.3"} for all items in the section.
     Numbers are assigned by tree position: top-level items get 1, 2, 3…;
     their children get 1.1, 1.2…; grandchildren get 1.1.1, etc.
+
+    When section_letter is provided (e.g. "A"), numbers become "A.1", "A.1.1", etc.
     """
     all_items = list(section.items.order_by('order'))
 
@@ -18,6 +20,7 @@ def compute_section_numbering(section):
         children_by_parent.setdefault(item.parent_id, []).append(item)
 
     numbers = {}
+    letter_prefix = f'{section_letter}.' if section_letter else ''
 
     def assign(parent_id, prefix):
         for i, item in enumerate(children_by_parent.get(parent_id, []), start=1):
@@ -25,8 +28,23 @@ def compute_section_numbering(section):
             numbers[item.pk] = number
             assign(item.pk, f'{number}.')
 
-    assign(None, '')
+    assign(None, letter_prefix)
     return numbers
+
+
+def compute_exhibit_numbering(exhibit):
+    """
+    Returns (numbers, section_letters) where:
+    - numbers: {item_pk: "A.1.2"} across all sections
+    - section_letters: {section_pk: "A"}
+    """
+    numbers = {}
+    section_letters = {}
+    for i, section in enumerate(exhibit.sections.order_by('order')):
+        letter = chr(65 + i)  # A, B, C, ...
+        section_letters[section.pk] = letter
+        numbers.update(compute_section_numbering(section, section_letter=letter))
+    return numbers, section_letters
 
 DEFAULT_SECTIONS = [
     'General Conditions',
@@ -215,7 +233,13 @@ def create_blank_exhibit(trade, user):
 
 
 def accept_ai_item(item):
-    """Accept an AI-proposed item: clear pending state, keep text as-is."""
+    """Accept an AI-proposed item: clear pending state, keep text as-is.
+    For pending deletes: actually delete the item and its descendants."""
+    if item.pending_delete:
+        descendants = _collect_descendants(item)
+        pks = [d.pk for d in descendants] + [item.pk]
+        ScopeItem.objects.filter(pk__in=pks).delete()
+        return
     item.is_pending_review = False
     item.pending_original_text = ''
     item.save(update_fields=['is_pending_review', 'pending_original_text', 'updated_at'])
@@ -224,9 +248,15 @@ def accept_ai_item(item):
 def reject_ai_item(item):
     """
     Reject an AI-proposed item.
+    - Pending delete: clear pending flags, keep the item.
     - Edit proposal (pending_original_text non-empty): restore original text.
     - New item proposal (pending_original_text empty): delete the item and all descendants.
     """
+    if item.pending_delete:
+        item.is_pending_review = False
+        item.pending_delete = False
+        item.save(update_fields=['is_pending_review', 'pending_delete', 'updated_at'])
+        return
     if item.pending_original_text:
         item.text = item.pending_original_text
         item.is_pending_review = False
@@ -240,7 +270,16 @@ def reject_ai_item(item):
 
 @transaction.atomic
 def accept_all_pending(exhibit):
-    """Accept all pending AI items across the exhibit."""
+    """Accept all pending AI items across the exhibit.
+    Pending deletes are actually deleted; add/edit items are accepted."""
+    pending = ScopeItem.objects.filter(section__scope_exhibit=exhibit, is_pending_review=True)
+    to_delete = pending.filter(pending_delete=True)
+    if to_delete.exists():
+        delete_pks = list(to_delete.values_list('pk', flat=True))
+        for item in to_delete:
+            delete_pks.extend(d.pk for d in _collect_descendants(item))
+        ScopeItem.objects.filter(pk__in=delete_pks).delete()
+    # Accept remaining (add/edit)
     ScopeItem.objects.filter(
         section__scope_exhibit=exhibit,
         is_pending_review=True,
@@ -251,14 +290,24 @@ def accept_all_pending(exhibit):
 def reject_all_pending(exhibit):
     """
     Reject all pending AI items across the exhibit.
-    Items with pending_original_text are restored; new items (empty original) are deleted.
+    Pending deletes: clear flags, keep item. Edits: restore original. New items: delete.
     """
     pending = list(
         ScopeItem.objects.filter(section__scope_exhibit=exhibit, is_pending_review=True)
     )
 
-    to_restore = [i for i in pending if i.pending_original_text]
-    to_delete = [i for i in pending if not i.pending_original_text]
+    # Partition before mutating any in-memory state
+    keep_pks = {i.pk for i in pending if i.pending_delete}
+    to_keep = [i for i in pending if i.pk in keep_pks]
+    to_restore = [i for i in pending if i.pending_original_text and i.pk not in keep_pks]
+    to_delete = [i for i in pending if not i.pending_original_text and i.pk not in keep_pks]
+
+    # Pending deletes → keep items, clear flags
+    if to_keep:
+        for item in to_keep:
+            item.is_pending_review = False
+            item.pending_delete = False
+        ScopeItem.objects.bulk_update(to_keep, ['is_pending_review', 'pending_delete'])
 
     if to_restore:
         for item in to_restore:

@@ -12,10 +12,12 @@ Full product specification: `docs/specs.md`. This is the authoritative reference
 |-------|-----------------|
 | Workflows & user stories | `## Detailed Workflow / User Stories` |
 | Data models (full detail) | `## Technical Architecture / System Design` |
-| AI service functions | `### AI Service Layer` |
+| AI service functions & chat infrastructure | `### AI Service Layer` |
+| AI UX entry points | `### AI Assistant UX` |
 | HTMX interaction patterns | `### HTMX Interaction Patterns` |
 | MVP scope boundaries | `### MVP Workflow Summary` |
 | Post-MVP deferred features | `### Post-MVP Architecture Notes` |
+| All pending work (deployment, AI, app features) | `## Pending Implementation` |
 
 ## Commands
 
@@ -66,7 +68,7 @@ DB_USER=$(whoami) DB_PASSWORD="" .venv/bin/python manage.py createsuperuser
 | `exhibits` | ScopeExhibit, ExhibitSection, ScopeItem; the scope editor |
 | `notes` | Cross-trade note tracking with resolution workflow |
 | `reviews` | ChecklistItem, FinalReview, FinalReviewItem; final review checklist |
-| `ai_services` | Claude API integration — two functions: scope description → exhibit language, natural language → inclusion/exclusion item |
+| `ai_services` | Claude API integration — scope generation, item rewrite/expand, section AI, note-to-scope conversion, completeness check, conversational chat with tool use |
 | `exports` | WeasyPrint PDF generation |
 
 ### Key Data Relationships
@@ -91,11 +93,31 @@ The `ScopeItem` model uses `parent` (self-FK), `level`, and `order` fields for h
 - Centralize all reorder logic in a service layer with transactional updates
 
 ### AI Service Layer
-Two functions in `ai_services/` (not yet implemented):
-1. `generate_scope_from_description()` — project/trade description → structured exhibit sections + items
-2. `generate_scope_item()` — natural language input → single standardized inclusion/exclusion
+All AI functions live in `ai_services/services.py`, gated by the `AI_ENABLED` setting. Every workflow must work without AI.
 
-AI is behind the `AI_ENABLED` setting. Every exhibit workflow must work without AI. Generated items are stored as regular `ScopeItem` records with `is_ai_generated=True`. No prompt text is stored — only token/cost/error metrics in `AIRequestLog`.
+**Service functions:**
+1. `generate_scope_from_description(exhibit)` — project/trade description → structured exhibit sections + items (gap-fill mode when ≥5 items exist)
+2. `generate_scope_item(input_text, exhibit, section)` — natural language → single polished scope item
+3. `rewrite_scope_item(item, exhibit, instruction)` — rewrite a single item with optional instruction
+4. `expand_scope_item(item, exhibit)` — expand one item into sub-items
+5. `section_ai_action(section, exhibit, instruction)` — unified section-level AI: uses tool-based API (add/edit/delete tools) to decide actions from a free-form instruction
+6. `rewrite_section_items(section, exhibit, instruction)` — bulk rewrite all items in a section
+7. `convert_note_to_scope(note, exhibit, instruction)` — convert a note to scope item with overlap detection
+8. `check_exhibit_completeness(exhibit)` — identify gaps in scope coverage
+9. `chat_with_exhibit(exhibit, messages)` — conversational AI with Claude tool use (add/edit/delete/convert_note tools)
+
+**Architecture pattern — "one AI brain, multiple entry points":**
+- Chat overlay is the full-flexibility interface with all tools available
+- AI icons throughout the UI (sections, items, notes) are pre-scoped shortcuts into the same service layer
+- Each icon opens a popover/inline form with a text input for quick instructions
+- All AI-generated items use `is_pending_review=True` for accept/reject workflow
+- Token/cost/error metrics logged to `AIRequestLog` (no prompt text stored)
+
+**Chat infrastructure:**
+- Server-side history: `ChatSession` + `ChatMessage` models (persist across page reloads)
+- Structured context: `_build_structured_chat_context()` → JSON with item PKs, refs, hierarchy, notes
+- Claude tool use API: `_call_claude_with_tools()` with `CHAT_TOOLS` (add/edit/delete/convert_note)
+- `_apply_proposed_changes()` in views handles all tool-generated changes uniformly
 
 ## Development Progress
 
@@ -105,11 +127,16 @@ Track completed and pending work in `docs/checklist.md`. Check this at the start
 - `main` — stable, deployable
 - `develop` — active development; merge to `main` at end of each phase
 
-### MVP Phases
+### Development Phases
 1. Foundation + data models ✅
-2. Project dashboard + trade import
-3. Scope exhibit editor (Weeks 3–4, ~40% of total effort)
-4. PDF export (closes core value loop)
-5. Notes & cross-trade tracking
-6. AI scope assistant
-7. Final review + hardening + pilot launch
+2. Project dashboard + trade import ✅
+3. Scope exhibit editor ✅
+4. PDF export ✅
+5. Notes & cross-trade tracking ✅
+6. AI scope assistant ✅
+7. Final review + hardening ✅
+8. AI assistant redesign — pending review workflow, per-item rewrite/expand, chat overlay with tool use ✅
+9. AI architecture upgrade — server-side chat history, structured context, section letter numbering, Claude tool use API ✅
+   - Step 5: New AI capabilities — unified section AI action, note-to-scope conversion with overlap detection, chat batch note conversion ✅
+
+**Remaining:** seed production data, pilot launch onboarding (deployment only)

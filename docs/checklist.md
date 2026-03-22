@@ -424,3 +424,98 @@ Track progress phase by phase. Check items off as completed.
 - [x] `item_rewrite` view tests (pending fields set correctly, mocked Claude, no-op on failure, company isolation) — 5 tests *(2026-03-13)*
 - [x] `item_expand` view tests (child items created as pending, parent FK correct, mocked Claude) — 5 tests *(2026-03-13)*
 - [x] `ai_chat_send` view tests (add/edit/delete changes, history threading, AI failure, company isolation) — 10 tests *(2026-03-13)*
+
+---
+
+## Phase 9: AI Architecture Upgrade
+**Goal**: Upgrade the AI from a stateless assistant to a persistent, tool-using system. Server-side chat memory, structured context, and Claude tool use. See `## AI Architecture Roadmap` in `docs/specs.md` for full details.
+
+### Step 1: Server-Side Chat History (Roadmap 1.1)
+
+#### Data Models
+- [x] `ChatSession` model in `ai_services/models.py`: FK exhibit (nullable), FK user, `context_type` (default `'exhibit'`), `created_at`, `updated_at` *(2026-03-17)*
+- [x] `ChatMessage` model in `ai_services/models.py`: FK session, `role` (user/assistant), `content` (TextField), FK user (nullable — null for assistant), `tokens_used` (nullable), `created_at` *(2026-03-17)*
+- [x] Register both models in `ai_services/admin.py` *(2026-03-17)*
+- [x] Generate and apply migration *(2026-03-17)*
+
+#### View & Service Changes
+- [x] Update `ai_chat_send` view: read history from DB instead of POST body; save user message and assistant response as `ChatMessage` records *(2026-03-17)*
+- [x] Update `ai_chat` view: load existing messages from DB for the exhibit's chat session; create session on first open *(2026-03-17)*
+- [x] Build conversation history for `chat_with_exhibit()` from DB records instead of client JSON *(2026-03-17)*
+
+#### Template & JS Cleanup
+- [x] Update `chat_side_panel.html`: render messages from DB on initial load instead of empty state *(2026-03-17)*
+- [x] Update `ai_chat_messages.html`: remove `data-history` attribute (no longer needed) *(2026-03-17)*
+- [x] Remove `window.chatHistory` JS array, `#chat-history-input` hidden field, `htmx:configRequest` history injection, and `htmx:afterSwap` history reading *(2026-03-17)*
+
+#### Tests
+- [x] Model tests: ChatSession/ChatMessage creation, FK relationships, ordering *(2026-03-17)*
+- [x] View tests: `ai_chat_send` persists both messages to DB, conversation loads from DB on panel open *(2026-03-17)*
+- [x] Conversation continuity: send message → reload page → open chat → previous messages visible *(2026-03-17)*
+- [x] Company isolation: cannot access another company's exhibit chat session *(2026-03-17)*
+- [x] Existing chat functionality still works end-to-end (send, receive, proposed changes applied) *(2026-03-17)*
+
+### Step 2: Structured Context Injection (Roadmap 1.2)
+
+- [x] `_build_structured_chat_context(exhibit)` function in `ai_services/services.py` *(2026-03-18)*
+- [x] Items include: pk, section_id, text, level, parent_id, is_pending_review, is_ai_generated, original_text (when pending) *(2026-03-18)*
+- [x] Notes: auto-include OPEN notes for exhibit's trade, truncated to 500 chars *(2026-03-18)*
+- [x] `chat_with_exhibit()` updated to use structured JSON context instead of plain text *(2026-03-18)*
+- [x] `CHAT_SYSTEM_PROMPT` updated: describes JSON format, instructs Claude to use PKs, skip pending items *(2026-03-18)*
+- [x] Unit tests for `_build_structured_chat_context()` (trade/project info, items with PKs, hierarchy, notes filtering) *(2026-03-18)*
+- [x] Integration tests: structured context flows through to Claude API system prompt *(2026-03-18)*
+
+### Step 3: Section Letter Numbering + Chat Item References
+
+- [x] `compute_section_numbering()` updated to accept `section_letter` param — numbers become "A.1", "A.1.1" etc. *(2026-03-18)*
+- [x] `compute_exhibit_numbering()` added: assigns A, B, C letters to sections, returns (numbers, section_letters) *(2026-03-18)*
+- [x] Editor views (`exhibit_editor`, `_section_list_response`, `_item_list_response`, `item_edit`, `item_rewrite`) updated to use exhibit-level numbering *(2026-03-18)*
+- [x] `section.html` template: shows section letter (e.g. "A.") before section name *(2026-03-18)*
+- [x] PDF export: `exports/services.py` uses `compute_exhibit_numbering()`; `exhibit_pdf.html` shows section letter before header *(2026-03-18)*
+- [x] `_build_structured_chat_context()` adds `letter` to sections and `ref` to items in context JSON *(2026-03-18)*
+- [x] `CHAT_SYSTEM_PROMPT` updated: instructs Claude to use `ref` (e.g. "item A.3.1") in messages, `target_item_pk` in proposed_changes *(2026-03-18)*
+- [x] `_linkify_item_refs()` helper: HTML-escapes message, replaces item refs with clickable `<a>` links (longest-first matching) *(2026-03-18)*
+- [x] `chat_with_exhibit()` linkifies assistant messages before returning *(2026-03-18)*
+- [x] Chat templates updated: `|safe` for assistant messages only (user messages stay escaped) *(2026-03-18)*
+- [x] `scrollToItem(pk)` JS function added to editor: smooth-scrolls to item, applies 2s highlight ring *(2026-03-18)*
+- [x] Tests: `compute_section_numbering` with letter prefix, `compute_exhibit_numbering`, `_linkify_item_refs`, structured context `ref`/`letter` — 284 tests passing *(2026-03-18)*
+
+### Step 4: Claude Tool Use for Chat (Roadmap 1.3)
+
+- [x] `CHAT_TOOLS` schema: `add_scope_item`, `edit_scope_item`, `delete_scope_item` tool definitions *(2026-03-18)*
+- [x] `_call_claude_with_tools()` helper: sends tools param, extracts TextBlock + ToolUseBlock from response, logs to AIRequestLog *(2026-03-18)*
+- [x] `_tool_calls_to_changes()` adapter: converts tool calls to existing `proposed_changes` format *(2026-03-18)*
+- [x] `chat_with_exhibit()` rewritten: uses `_call_claude_with_tools()` instead of `_call_claude()` + JSON parsing; assistant messages passed as plain text (no JSON wrapping); return interface unchanged *(2026-03-18)*
+- [x] `CHAT_SYSTEM_PROMPT` simplified: removed JSON OUTPUT FORMAT section, replaced with tool usage instructions *(2026-03-18)*
+- [x] Tests: `_tool_calls_to_changes` (add/edit/delete/mixed/empty), `_call_claude_with_tools` (success/retry/failure/tools-passed), chat tests updated for tool-based mocks — 298 tests passing *(2026-03-18)*
+
+### Step 5: Phase 2 — New AI Capabilities
+
+#### Unified Section AI Action
+- [x] `SECTION_AI_SYSTEM_PROMPT` in `ai_services/prompts.py`: tool-based prompt for section-scoped AI actions *(2026-03-21)*
+- [x] `section_ai_action(section, exhibit, instruction)` service function: uses `_call_claude_with_tools()` with add/edit/delete tools scoped to a single section; AI determines what to do based on the instruction *(2026-03-21)*
+- [x] `section_ai` view: single endpoint replaces separate generate + rewrite; applies changes via `_apply_proposed_changes()` *(2026-03-21)*
+- [x] `section.html` popover simplified: single text input + "Go" button (was two-form layout with separate generate/rewrite); AI decides the action from the instruction *(2026-03-21)*
+- [x] URL: `<int:pk>/sections/<int:section_pk>/ai/` *(2026-03-21)*
+- [x] `REWRITE_SECTION_SYSTEM_PROMPT` and `rewrite_section_items()` kept for backward compatibility *(2026-03-21)*
+- [x] Tests: add via tool, edit via tool, empty instruction no-op, AI failure no-op, company scoping, service-level tests — 9 tests *(2026-03-21)*
+
+#### Note-to-Scope AI Conversion
+- [x] `NOTE_TO_SCOPE_SYSTEM_PROMPT` in `ai_services/prompts.py`: checks overlap first, then generates item *(2026-03-21)*
+- [x] `convert_note_to_scope(note, exhibit)` service function: overlap check + generation, considers resolution text *(2026-03-21)*
+- [x] `note_to_scope_ai` view: handles overlap (returns overlap template) and created (pending item + auto-resolve note) *(2026-03-21)*
+- [x] `note_overlap.html` template: shows overlapping item, "Edit Existing" / "Add New Anyway" / dismiss X buttons *(2026-03-21)*
+- [x] ✨ icon on `note_card.html` for open notes: opens inline AI form (bottom of card, same pattern as resolve form) to avoid overflow clipping in scrollable sidebar *(2026-03-21)*
+- [x] `ai_enabled` and `exhibit` context added to `note_list` and `note_add` views *(2026-03-21)*
+- [x] URL: `<int:pk>/notes/<int:note_pk>/convert-ai/` *(2026-03-21)*
+- [x] Tests: created flow (pending item + note resolved), overlap flow, already-resolved error, section fallback, company scoping — 9 tests *(2026-03-21)*
+
+#### Chat Tool: Note-to-Scope Batch Conversion
+- [x] `convert_note_to_scope` tool added to `CHAT_TOOLS` (note_pk, section_name, text, level) *(2026-03-21)*
+- [x] `_tool_calls_to_changes()` handles `convert_note_to_scope` → `convert_note` action *(2026-03-21)*
+- [x] `_apply_proposed_changes()` handles `convert_note` action: creates pending item, auto-resolves note *(2026-03-21)*
+- [x] `CHAT_SYSTEM_PROMPT` updated with `convert_note_to_scope` tool documentation *(2026-03-21)*
+- [x] `REWRITE_SECTION` and `NOTE_TO_SCOPE` added to `AIRequestLog.RequestType` (single migration) *(2026-03-21)*
+- [x] Tests: tool call conversion, apply changes with note resolution, skip resolved notes — 3 tests *(2026-03-21)*
+
+**Total: 342 tests passing**
