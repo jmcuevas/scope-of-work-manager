@@ -3,8 +3,9 @@ from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, expand_scope_item, generate_scope_from_description, generate_scope_item, rewrite_scope_item
+from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items
 from django.conf import settings
+from django.utils import timezone
 from notes.forms import NoteForm
 from notes.models import Note
 from projects.models import Project, Trade
@@ -623,6 +624,282 @@ def item_expand(request, pk, section_pk, item_pk):
 
 
 # ---------------------------------------------------------------------------
+# AI: Bulk section rewrite
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_POST
+def section_rewrite(request, pk, section_pk):
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    section = get_object_or_404(ExhibitSection, pk=section_pk, scope_exhibit=exhibit)
+
+    instruction = request.POST.get('instruction', '').strip()
+    if not instruction:
+        return _item_list_response(request, exhibit, section)
+
+    try:
+        rewrites = rewrite_section_items(section, exhibit, instruction)
+    except (AIDisabledError, AIServiceError):
+        rewrites = None
+
+    if rewrites:
+        for entry in rewrites:
+            try:
+                item = ScopeItem.objects.get(pk=entry['pk'], section=section)
+                item.pending_original_text = item.text
+                item.text = entry['exhibit_text']
+                item.is_pending_review = True
+                item.is_ai_generated = True
+                item.save(update_fields=[
+                    'text', 'pending_original_text',
+                    'is_pending_review', 'is_ai_generated', 'updated_at',
+                ])
+            except ScopeItem.DoesNotExist:
+                continue
+
+    response = _item_list_response(request, exhibit, section)
+    if rewrites:
+        response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+# ---------------------------------------------------------------------------
+# AI: Note-to-scope conversion
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_POST
+def note_to_scope_ai(request, pk, note_pk):
+    """Convert a note to a scope item using AI, with overlap check."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    note = get_object_or_404(
+        Note, pk=note_pk, project=exhibit.project, project__company=request.user.company,
+    )
+
+    if note.status != Note.Status.OPEN:
+        from django.http import HttpResponse
+        return HttpResponse(
+            '<div class="text-xs text-red-500 p-2">This note is already resolved.</div>'
+        )
+
+    # edit_item_pk = rewrite an existing item incorporating the note (used by "Edit Existing Item")
+    edit_item_pk = request.POST.get('edit_item_pk')
+    if edit_item_pk:
+        try:
+            item = ScopeItem.objects.get(pk=edit_item_pk, section__scope_exhibit=exhibit)
+        except ScopeItem.DoesNotExist:
+            from django.http import HttpResponse
+            return HttpResponse(
+                '<div class="text-xs text-red-500 p-2">Item not found.</div>'
+            )
+        instruction = f'Incorporate this note into the item: {note.text}'
+        if note.resolution:
+            instruction += f' (Resolution: {note.resolution})'
+        try:
+            proposed_text = rewrite_scope_item(item, exhibit, instruction=instruction)
+        except (AIDisabledError, AIServiceError):
+            proposed_text = None
+
+        if proposed_text:
+            item.pending_original_text = item.text
+            item.text = proposed_text
+            item.is_pending_review = True
+            item.is_ai_generated = True
+            item.save(update_fields=[
+                'text', 'pending_original_text',
+                'is_pending_review', 'is_ai_generated', 'updated_at',
+            ])
+
+        # Resolve the note
+        note.scope_item = item
+        note.status = Note.Status.RESOLVED
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        item_ref = numbers.get(item.pk, '')
+        note.resolution = f'Incorporated into scope item {item_ref} by AI'
+        note.resolved_by = request.user
+        note.resolved_at = timezone.now()
+        note.save(update_fields=[
+            'scope_item', 'status', 'resolution',
+            'resolved_by', 'resolved_at', 'updated_at',
+        ])
+
+        # Return updated note card
+        note.refresh_from_db()
+        notes_qs = Note.objects.filter(pk=note.pk).select_related(
+            'primary_trade__csi_trade', 'created_by', 'resolved_by', 'scope_item__section',
+        ).prefetch_related('related_trades__csi_trade')
+        note = notes_qs.first()
+        from exhibits.services import compute_section_numbering as _csn2
+        note_numbers = {}
+        if note.scope_item:
+            note_numbers = _csn2(note.scope_item.section)
+        response = render(request, 'notes/partials/note_card.html', {
+            'note': note,
+            'exhibit': exhibit,
+            'numbers': note_numbers,
+            'ai_enabled': settings.AI_ENABLED,
+        })
+        response['HX-Trigger'] = 'pendingChanged'
+        return response
+
+    # skip_overlap=1 bypasses the AI overlap check (used by "Add New Anyway" button)
+    skip_overlap = request.POST.get('skip_overlap')
+    if skip_overlap:
+        result = None
+        # Go straight to generation using generate_scope_item
+        section_pk = request.POST.get('section_pk')
+        section = None
+        if section_pk:
+            try:
+                section = ExhibitSection.objects.get(pk=section_pk, scope_exhibit=exhibit)
+            except ExhibitSection.DoesNotExist:
+                pass
+        if not section:
+            section = exhibit.sections.order_by('order').first()
+
+        if section:
+            try:
+                exhibit_text = generate_scope_item(note.text, exhibit, section)
+            except (AIDisabledError, AIServiceError):
+                exhibit_text = None
+
+            text = exhibit_text or note.text
+            last = section.items.order_by('-order').values_list('order', flat=True).first()
+            last_order = last if last is not None else -1
+            item = ScopeItem.objects.create(
+                section=section,
+                text=text,
+                original_input=note.text,
+                level=0,
+                parent=None,
+                order=last_order + 1,
+                is_ai_generated=exhibit_text is not None,
+                is_pending_review=exhibit_text is not None,
+                created_by=request.user,
+            )
+            numbers, _sl = compute_exhibit_numbering(exhibit)
+            item_ref = numbers.get(item.pk, '')
+            note.scope_item = item
+            note.status = Note.Status.RESOLVED
+            note.resolution = f'Converted to scope item {item_ref} by AI'
+            note.resolved_by = request.user
+            note.resolved_at = timezone.now()
+            note.save(update_fields=[
+                'scope_item', 'status', 'resolution',
+                'resolved_by', 'resolved_at', 'updated_at',
+            ])
+
+        # Return updated note card
+        note.refresh_from_db()
+        notes_qs = Note.objects.filter(pk=note.pk).select_related(
+            'primary_trade__csi_trade', 'created_by', 'resolved_by', 'scope_item__section',
+        ).prefetch_related('related_trades__csi_trade')
+        note = notes_qs.first()
+        from exhibits.services import compute_section_numbering as _csn
+        note_numbers = {}
+        if note.scope_item:
+            note_numbers = _csn(note.scope_item.section)
+        response = render(request, 'notes/partials/note_card.html', {
+            'note': note,
+            'exhibit': exhibit,
+            'numbers': note_numbers,
+            'ai_enabled': settings.AI_ENABLED,
+        })
+        response['HX-Trigger'] = 'pendingChanged'
+        return response
+
+    instruction = request.POST.get('instruction', '').strip()
+    try:
+        result = convert_note_to_scope(note, exhibit, instruction=instruction)
+    except (AIDisabledError, AIServiceError):
+        result = None
+
+    if result is None:
+        from django.http import HttpResponse
+        return HttpResponse(
+            '<div class="text-xs text-red-500 p-2">AI conversion failed. Please try again.</div>'
+        )
+
+    if result['status'] == 'overlap':
+        # Find the overlapping item's ref number
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        overlap_pk = result.get('overlap_item_pk')
+        overlap_ref = numbers.get(overlap_pk, '')
+        overlap_item = None
+        if overlap_pk:
+            try:
+                overlap_item = ScopeItem.objects.get(pk=overlap_pk, section__scope_exhibit=exhibit)
+            except ScopeItem.DoesNotExist:
+                pass
+
+        # Fallback section for "Add New Anyway" when overlap_item is None
+        fallback_section = exhibit.sections.order_by('order').first()
+        fallback_section_pk = fallback_section.pk if fallback_section else ''
+
+        return render(request, 'exhibits/partials/note_overlap.html', {
+            'exhibit': exhibit,
+            'note': note,
+            'overlap_item': overlap_item,
+            'overlap_ref': overlap_ref,
+            'explanation': result.get('explanation', ''),
+            'fallback_section_pk': fallback_section_pk,
+        })
+
+    # status == 'created'
+    section_name = result['section_name']
+    sections = {s.name.lower(): s for s in exhibit.sections.all()}
+    section = sections.get(section_name.lower())
+    if not section:
+        # Fallback to first section
+        section = exhibit.sections.order_by('order').first()
+
+    if section:
+        last = section.items.order_by('-order').values_list('order', flat=True).first()
+        last_order = last if last is not None else -1
+        item = ScopeItem.objects.create(
+            section=section,
+            text=result['exhibit_text'],
+            original_input=note.text,
+            level=0,
+            parent=None,
+            order=last_order + 1,
+            is_ai_generated=True,
+            is_pending_review=True,
+            created_by=request.user,
+        )
+        # Link note to item and auto-resolve
+        numbers, _sl = compute_exhibit_numbering(exhibit)
+        item_ref = numbers.get(item.pk, '')
+        note.scope_item = item
+        note.status = Note.Status.RESOLVED
+        note.resolution = f'Converted to scope item {item_ref} by AI'
+        note.resolved_by = request.user
+        note.resolved_at = timezone.now()
+        note.save(update_fields=[
+            'scope_item', 'status', 'resolution',
+            'resolved_by', 'resolved_at', 'updated_at',
+        ])
+
+    # Return updated note card
+    notes = Note.objects.filter(pk=note.pk).select_related(
+        'primary_trade__csi_trade', 'created_by', 'resolved_by', 'scope_item__section',
+    ).prefetch_related('related_trades__csi_trade')
+    note = notes.first()
+    from exhibits.services import compute_section_numbering
+    note_numbers = {}
+    if note.scope_item:
+        note_numbers = compute_section_numbering(note.scope_item.section)
+    response = render(request, 'notes/partials/note_card.html', {
+        'note': note,
+        'exhibit': exhibit,
+        'numbers': note_numbers,
+        'ai_enabled': settings.AI_ENABLED,
+    })
+    response['HX-Trigger'] = 'pendingChanged'
+    return response
+
+
+# ---------------------------------------------------------------------------
 # AI: Generate full scope from description
 # ---------------------------------------------------------------------------
 
@@ -957,6 +1234,54 @@ def _apply_proposed_changes(exhibit, changes, user):
                     applied += 1
                     applied_pks.append(item.pk)
                 except ScopeItem.DoesNotExist:
+                    pass
+
+        elif action == 'convert_note':
+            note_pk = change.get('note_pk')
+            section_name = change.get('section_name', '').strip()
+            text = change.get('text', '').strip()
+            level = int(change.get('level', 0))
+            section = section_by_name.get(section_name.lower())
+            if note_pk and section and text:
+                try:
+                    note = Note.objects.get(
+                        pk=note_pk, project=exhibit.project,
+                        project__company=exhibit.company,
+                    )
+                    if note.status != Note.Status.OPEN:
+                        continue
+                    # Create pending scope item
+                    sibling_last = (
+                        section.items.filter(parent=None)
+                        .order_by('-order')
+                        .values_list('order', flat=True)
+                        .first()
+                    )
+                    next_order = (sibling_last + 1) if sibling_last is not None else 0
+                    item = ScopeItem.objects.create(
+                        section=section,
+                        text=text,
+                        level=level,
+                        parent=None,
+                        order=next_order,
+                        is_ai_generated=True,
+                        is_pending_review=True,
+                        original_input=note.text,
+                        created_by=user,
+                    )
+                    # Link and resolve the note
+                    note.scope_item = item
+                    note.status = Note.Status.RESOLVED
+                    note.resolution = 'Converted to scope item by AI'
+                    note.resolved_by = user
+                    note.resolved_at = timezone.now()
+                    note.save(update_fields=[
+                        'scope_item', 'status', 'resolution',
+                        'resolved_by', 'resolved_at', 'updated_at',
+                    ])
+                    applied += 1
+                    applied_pks.append(item.pk)
+                except Note.DoesNotExist:
                     pass
 
     return applied, applied_pks

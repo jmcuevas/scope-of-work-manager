@@ -1391,3 +1391,202 @@ class TestCallClaudeWithTools:
             )
         assert result['text'] == 'Just text, no tools.'
         assert result['tool_calls'] == []
+
+
+# ---------------------------------------------------------------------------
+# rewrite_section_items
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestRewriteSectionItems:
+    def test_rewrites_all_items(self):
+        from ai_services.services import rewrite_section_items
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        item1 = ScopeItemFactory(section=section, text='Install ductwork.', order=0, created_by=user)
+        item2 = ScopeItemFactory(section=section, text='Provide hangers.', order=1, created_by=user)
+
+        response_json = json.dumps({
+            'items': [
+                {'pk': item1.pk, 'exhibit_text': 'Subcontractor shall install all ductwork.'},
+                {'pk': item2.pk, 'exhibit_text': 'Subcontractor shall provide all hangers.'},
+            ]
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(response_json)
+            result = rewrite_section_items(section, exhibit, 'convert to subcontract language')
+
+        assert len(result) == 2
+        assert result[0]['pk'] == item1.pk
+        assert 'Subcontractor' in result[0]['exhibit_text']
+
+    def test_empty_section_returns_empty_list(self):
+        from ai_services.services import rewrite_section_items
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Empty', order=0)
+
+        result = rewrite_section_items(section, exhibit, 'anything')
+        assert result == []
+
+    def test_skips_pending_items(self):
+        from ai_services.services import rewrite_section_items
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Pending item.', order=0, is_pending_review=True, created_by=user)
+        live_item = ScopeItemFactory(section=section, text='Live item.', order=1, created_by=user)
+
+        response_json = json.dumps({
+            'items': [{'pk': live_item.pk, 'exhibit_text': 'Rewritten live item.'}]
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(response_json)
+            result = rewrite_section_items(section, exhibit, 'improve')
+
+        assert len(result) == 1
+        assert result[0]['pk'] == live_item.pk
+
+    def test_skips_unknown_pks(self):
+        from ai_services.services import rewrite_section_items
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        item = ScopeItemFactory(section=section, text='Item.', order=0, created_by=user)
+
+        response_json = json.dumps({
+            'items': [
+                {'pk': item.pk, 'exhibit_text': 'Good.'},
+                {'pk': 99999, 'exhibit_text': 'Unknown.'},
+            ]
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(response_json)
+            result = rewrite_section_items(section, exhibit, 'improve')
+
+        assert len(result) == 1
+
+    @pytest.mark.parametrize('enabled', [False])
+    def test_ai_disabled(self, settings, enabled):
+        from ai_services.services import rewrite_section_items
+        settings.AI_ENABLED = enabled
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, order=0)
+        with pytest.raises(AIDisabledError):
+            rewrite_section_items(section, exhibit, 'anything')
+
+
+# ---------------------------------------------------------------------------
+# convert_note_to_scope
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestConvertNoteToScope:
+    def _make_note(self, exhibit, user, resolution=''):
+        trade = TradeFactory(
+            project=exhibit.project, csi_trade=exhibit.csi_trade,
+        )
+        note = NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Caulking should be in glazing scope.',
+            created_by=user,
+        )
+        if resolution:
+            note.resolution = resolution
+            note.save(update_fields=['resolution'])
+        return note
+
+    def test_no_overlap_returns_created(self):
+        from ai_services.services import convert_note_to_scope
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        note = self._make_note(exhibit, user)
+
+        response_json = json.dumps({
+            'status': 'created',
+            'section_name': 'Scope of Work',
+            'exhibit_text': 'Provide all caulking at curtain wall assemblies.',
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(response_json)
+            result = convert_note_to_scope(note, exhibit)
+
+        assert result['status'] == 'created'
+        assert result['section_name'] == 'Scope of Work'
+        assert 'caulking' in result['exhibit_text'].lower()
+
+    def test_overlap_returns_overlap(self):
+        from ai_services.services import convert_note_to_scope
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        item = ScopeItemFactory(section=section, text='Provide all caulking.', order=0, created_by=user)
+        note = self._make_note(exhibit, user)
+
+        response_json = json.dumps({
+            'status': 'overlap',
+            'overlap_item_pk': item.pk,
+            'explanation': 'Item already covers caulking.',
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(response_json)
+            result = convert_note_to_scope(note, exhibit)
+
+        assert result['status'] == 'overlap'
+        assert result['overlap_item_pk'] == item.pk
+
+    def test_includes_resolution_in_prompt(self):
+        from ai_services.services import convert_note_to_scope
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        note = self._make_note(exhibit, user, resolution='Confirmed: glazing carries caulking.')
+
+        response_json = json.dumps({
+            'status': 'created',
+            'section_name': 'Scope of Work',
+            'exhibit_text': 'Provide all caulking.',
+        })
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.create.return_value = _mock_response(response_json)
+            convert_note_to_scope(note, exhibit)
+
+        # Verify resolution was in the user prompt
+        call_args = mock_client.return_value.messages.create.call_args
+        user_msg = call_args.kwargs['messages'][0]['content']
+        assert 'Confirmed: glazing carries caulking.' in user_msg
+
+    @pytest.mark.parametrize('enabled', [False])
+    def test_ai_disabled(self, settings, enabled):
+        from ai_services.services import convert_note_to_scope
+        settings.AI_ENABLED = enabled
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        note = self._make_note(exhibit, user)
+        with pytest.raises(AIDisabledError):
+            convert_note_to_scope(note, exhibit)
+
+
+# ---------------------------------------------------------------------------
+# _tool_calls_to_changes: convert_note_to_scope
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestToolCallsConvertNote:
+    def test_convert_note_tool_call(self):
+        result = _tool_calls_to_changes([{
+            'name': 'convert_note_to_scope',
+            'input': {
+                'note_pk': 42,
+                'section_name': 'Scope of Work',
+                'text': 'Provide all caulking.',
+                'level': 0,
+            },
+        }])
+        assert len(result) == 1
+        assert result[0]['action'] == 'convert_note'
+        assert result[0]['note_pk'] == 42
+        assert result[0]['section_name'] == 'Scope of Work'

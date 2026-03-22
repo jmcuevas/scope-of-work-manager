@@ -1,0 +1,59 @@
+{% load exhibit_tags %}
+<div id="note-{{ note.pk }}"
+     class="rounded-lg border border-amber-200 bg-amber-50 shadow-sm mb-3 overflow-hidden">
+  <div class="px-3 py-3 space-y-2">
+    <!-- Header with dismiss button -->
+    <div class="flex items-center justify-between">
+      <p class="text-xs font-semibold text-amber-700 uppercase tracking-wider">Possible Overlap</p>
+      <button hx-get="{% url 'notes:note_list' exhibit.pk %}"
+              hx-target="#notes-list"
+              hx-swap="innerHTML"
+              title="Dismiss"
+              class="text-gray-400 hover:text-gray-600 transition-colors">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+        </svg>
+      </button>
+    </div>
+
+    <p class="text-sm text-gray-700">{{ explanation }}</p>
+
+    {% if overlap_item %}
+    <div class="bg-white rounded border border-gray-200 px-3 py-2">
+      <p class="text-xs text-gray-400 mb-1">
+        {% if overlap_ref %}{{ overlap_ref }} &middot; {% endif %}{{ overlap_item.section.name }}
+      </p>
+      <p class="text-sm text-gray-700">{{ overlap_item.text }}</p>
+    </div>
+    {% endif %}
+
+    <div class="flex items-center gap-2 pt-1">
+      {% if overlap_item %}
+      <button hx-post="{% url 'exhibits:note_to_scope_ai' exhibit.pk note.pk %}"
+              hx-vals='{"edit_item_pk": "{{ overlap_item.pk }}"}'
+              hx-target="#note-{{ note.pk }}"
+              hx-swap="outerHTML"
+              hx-indicator="#overlap-spinner-{{ note.pk }}"
+              class="px-3 py-1.5 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 rounded transition-colors">
+        <span id="overlap-spinner-{{ note.pk }}" class="htmx-indicator">⏳ </span>
+        Edit Existing Item
+      </button>
+      <button hx-post="{% url 'exhibits:note_to_scope_ai' exhibit.pk note.pk %}"
+              hx-vals='{"skip_overlap": "1", "section_pk": "{{ overlap_item.section.pk }}"}'
+              hx-target="#note-{{ note.pk }}"
+              hx-swap="outerHTML"
+              class="px-3 py-1.5 text-xs font-medium text-gray-600 hover:text-gray-800 bg-white border border-gray-200 rounded transition-colors">
+        Add New Item Anyway
+      </button>
+      {% else %}
+      <button hx-post="{% url 'exhibits:note_to_scope_ai' exhibit.pk note.pk %}"
+              hx-vals='{"skip_overlap": "1", "section_pk": "{{ fallback_section_pk }}"}'
+              hx-target="#note-{{ note.pk }}"
+              hx-swap="outerHTML"
+              class="px-3 py-1.5 text-xs font-medium text-gray-600 hover:text-gray-800 bg-white border border-gray-200 rounded transition-colors">
+        Add New Item Anyway
+      </button>
+      {% endif %}
+    </div>
+  </div>
+</div>

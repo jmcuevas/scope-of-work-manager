@@ -1977,3 +1977,261 @@ class TestApplyChangesAddParent:
         new_item = ScopeItem.objects.get(text='New top-level item.')
         assert new_item.parent is None
         assert new_item.level == 0
+
+
+# ---------------------------------------------------------------------------
+# Section rewrite view
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSectionRewriteView:
+    def test_rewrites_items_as_pending(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        item1 = ScopeItemFactory(section=section, text='Original 1.', order=0, created_by=user)
+        item2 = ScopeItemFactory(section=section, text='Original 2.', order=1, created_by=user)
+
+        import json
+        mock_return = [
+            {'pk': item1.pk, 'exhibit_text': 'Rewritten 1.'},
+            {'pk': item2.pk, 'exhibit_text': 'Rewritten 2.'},
+        ]
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.rewrite_section_items', return_value=mock_return):
+            response = client.post(url, {'instruction': 'convert to subcontract'})
+
+        assert response.status_code == 200
+        item1.refresh_from_db()
+        item2.refresh_from_db()
+        assert item1.text == 'Rewritten 1.'
+        assert item1.pending_original_text == 'Original 1.'
+        assert item1.is_pending_review is True
+        assert item2.text == 'Rewritten 2.'
+        assert 'pendingChanged' in response.get('HX-Trigger', '')
+
+    def test_empty_instruction_returns_without_changes(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': ''})
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_ai_failure_leaves_items_unchanged(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        ScopeItemFactory(section=section, text='Original.', order=0, created_by=user)
+
+        from ai_services.services import AIServiceError
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        with patch('exhibits.views.rewrite_section_items', side_effect=AIServiceError('fail')):
+            response = client.post(url, {'instruction': 'rewrite'})
+
+        assert response.status_code == 200
+        assert ScopeItem.objects.get(section=section).text == 'Original.'
+
+    def test_company_scoping(self, client):
+        user = PMUserFactory()
+        other_user = PMUserFactory()
+        _login(client, other_user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope', order=0)
+        url = reverse('exhibits:section_rewrite', args=[exhibit.pk, section.pk])
+        response = client.post(url, {'instruction': 'rewrite'})
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Note-to-scope AI conversion view
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestNoteToScopeAIView:
+    def _make_note_for_exhibit(self, exhibit, user):
+        trade = Trade.objects.filter(
+            project=exhibit.project, csi_trade=exhibit.csi_trade,
+        ).first()
+        if not trade:
+            trade = TradeFactory(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        return NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Sub needs to demo existing ceilings.',
+            created_by=user,
+        )
+
+    def test_created_makes_pending_item_and_resolves_note(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        note = self._make_note_for_exhibit(exhibit, user)
+
+        mock_result = {
+            'status': 'created',
+            'section_name': 'Scope of Work',
+            'exhibit_text': 'Demolish existing ceiling tile and grid in designated rooms.',
+        }
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        with patch('exhibits.views.convert_note_to_scope', return_value=mock_result):
+            response = client.post(url)
+
+        assert response.status_code == 200
+        assert 'pendingChanged' in response.get('HX-Trigger', '')
+
+        # Check scope item was created
+        item = ScopeItem.objects.get(section=section)
+        assert item.text == 'Demolish existing ceiling tile and grid in designated rooms.'
+        assert item.is_pending_review is True
+        assert item.is_ai_generated is True
+
+        # Check note was resolved
+        note.refresh_from_db()
+        assert note.status == Note.Status.RESOLVED
+        assert 'Converted to scope item' in note.resolution
+        assert note.scope_item == item
+
+    def test_overlap_returns_overlap_template(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work', order=0)
+        existing_item = ScopeItemFactory(
+            section=section, text='Demo ceilings.', order=0, created_by=user,
+        )
+        note = self._make_note_for_exhibit(exhibit, user)
+
+        mock_result = {
+            'status': 'overlap',
+            'overlap_item_pk': existing_item.pk,
+            'explanation': 'Item already covers ceiling demo.',
+        }
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        with patch('exhibits.views.convert_note_to_scope', return_value=mock_result):
+            response = client.post(url)
+
+        assert response.status_code == 200
+        content = response.content.decode()
+        assert 'Possible Overlap' in content
+        assert 'already covers ceiling demo' in content
+        # Note should NOT be resolved
+        note.refresh_from_db()
+        assert note.status == Note.Status.OPEN
+
+    def test_already_resolved_note_returns_error(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        note = self._make_note_for_exhibit(exhibit, user)
+        note.status = Note.Status.RESOLVED
+        note.save(update_fields=['status'])
+
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        response = client.post(url)
+        assert response.status_code == 200
+        assert 'already resolved' in response.content.decode()
+
+    def test_section_name_fallback(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='General', order=0)
+        note = self._make_note_for_exhibit(exhibit, user)
+
+        mock_result = {
+            'status': 'created',
+            'section_name': 'Nonexistent Section',
+            'exhibit_text': 'Some scope item.',
+        }
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        with patch('exhibits.views.convert_note_to_scope', return_value=mock_result):
+            response = client.post(url)
+
+        assert response.status_code == 200
+        # Should have fallen back to first section
+        assert ScopeItem.objects.filter(section=section).exists()
+
+    def test_company_scoping(self, client):
+        user = PMUserFactory()
+        other_user = PMUserFactory()
+        _login(client, other_user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        note = NoteFactory(
+            project=exhibit.project,
+            primary_trade=trade,
+            text='Test note.',
+            created_by=user,
+        )
+        url = reverse('exhibits:note_to_scope_ai', args=[exhibit.pk, note.pk])
+        response = client.post(url)
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# _apply_proposed_changes: convert_note action
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestApplyProposedChangesConvertNote:
+    def test_convert_note_creates_item_and_resolves_note(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        note = NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Add dumpster language.', created_by=user,
+        )
+
+        changes = [{
+            'action': 'convert_note',
+            'note_pk': note.pk,
+            'section_name': 'Scope of Work',
+            'text': 'Provide and coordinate all dumpster removal.',
+            'level': 0,
+        }]
+        applied, applied_pks = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 1
+
+        item = ScopeItem.objects.get(pk=applied_pks[0])
+        assert item.is_pending_review is True
+        assert item.is_ai_generated is True
+        assert item.original_input == 'Add dumpster language.'
+
+        note.refresh_from_db()
+        assert note.status == Note.Status.RESOLVED
+        assert note.scope_item == item
+        assert 'Converted to scope item by AI' in note.resolution
+
+    def test_skips_already_resolved_note(self):
+        user = PMUserFactory()
+        user.set_password('testpass123')
+        user.save(update_fields=['password'])
+        _, exhibit = _make_trade_with_exhibit(user)
+        section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        trade = Trade.objects.get(project=exhibit.project, csi_trade=exhibit.csi_trade)
+        note = NoteFactory(
+            project=exhibit.project, primary_trade=trade,
+            text='Already done.', created_by=user,
+            status=Note.Status.RESOLVED,
+        )
+
+        changes = [{
+            'action': 'convert_note',
+            'note_pk': note.pk,
+            'section_name': 'Scope of Work',
+            'text': 'Some text.',
+            'level': 0,
+        }]
+        applied, _ = _apply_proposed_changes(exhibit, changes, user)
+        assert applied == 0

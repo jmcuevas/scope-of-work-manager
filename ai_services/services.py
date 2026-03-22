@@ -11,7 +11,9 @@ from .prompts import (
     CHAT_SYSTEM_PROMPT,
     COMPLETENESS_SYSTEM_PROMPT,
     EXPAND_ITEM_SYSTEM_PROMPT,
+    NOTE_TO_SCOPE_SYSTEM_PROMPT,
     REWRITE_ITEM_SYSTEM_PROMPT,
+    REWRITE_SECTION_SYSTEM_PROMPT,
     SCOPE_FROM_DESCRIPTION_SYSTEM_PROMPT,
     SCOPE_ITEM_SYSTEM_PROMPT,
 )
@@ -65,6 +67,20 @@ CHAT_TOOLS = [
                 "target_item_pk": {"type": "integer", "description": "The pk of the item to delete."},
             },
             "required": ["target_item_pk"],
+        },
+    },
+    {
+        "name": "convert_note_to_scope",
+        "description": "Convert an open note into a scope item. Creates a pending scope item and resolves the note.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note_pk": {"type": "integer", "description": "The pk of the note to convert."},
+                "section_name": {"type": "string", "description": "Exact name of the target section for the new item."},
+                "text": {"type": "string", "description": "The scope item text derived from the note."},
+                "level": {"type": "integer", "enum": [0, 1], "description": "0 = top-level, 1 = sub-item."},
+            },
+            "required": ["note_pk", "section_name", "text", "level"],
         },
     },
 ]
@@ -262,6 +278,14 @@ def _tool_calls_to_changes(tool_calls):
             changes.append({
                 'action': 'delete',
                 'target_item_pk': inp['target_item_pk'],
+            })
+        elif tc['name'] == 'convert_note_to_scope':
+            changes.append({
+                'action': 'convert_note',
+                'note_pk': inp['note_pk'],
+                'section_name': inp['section_name'],
+                'text': inp['text'],
+                'level': inp['level'],
             })
     return changes
 
@@ -601,6 +625,129 @@ What important scope items are missing from this exhibit?
         g for g in parsed['gaps']
         if g.get('text', '').strip() and g.get('section_name', '').strip()
     ] or []
+
+
+def rewrite_section_items(section, exhibit, instruction):
+    """
+    Rewrite all non-pending items in a section with a single API call.
+
+    Returns a list of {"pk": int, "exhibit_text": str} dicts, or None on failure.
+    Returns [] for empty sections (no API call).
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    from exhibits.services import flatten_section_items
+
+    items = [i for i in flatten_section_items(section) if not i.is_pending_review]
+    if not items:
+        return []
+
+    items_text = '\n'.join(
+        f'pk: {item.pk} | level: {item.level} | text: {item.text}'
+        for item in items
+    )
+
+    user_prompt = f"""
+TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+SECTION: {section.name}
+INSTRUCTION: {instruction}
+
+ITEMS TO REWRITE:
+{items_text}
+""".strip()
+
+    text = _call_claude(
+        system_prompt=REWRITE_SECTION_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.REWRITE_SECTION,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None:
+        return None
+
+    result = []
+    valid_pks = {item.pk for item in items}
+    for entry in parsed.get('items', []):
+        pk = entry.get('pk')
+        exhibit_text = entry.get('exhibit_text', '').strip()
+        if pk in valid_pks and exhibit_text:
+            result.append({'pk': pk, 'exhibit_text': exhibit_text})
+    return result
+
+
+def convert_note_to_scope(note, exhibit, instruction=''):
+    """
+    Convert a note to a scope item, checking for overlap first.
+
+    Returns a dict:
+        {"status": "overlap", "overlap_item_pk": int, "explanation": str}
+        or
+        {"status": "created", "section_name": str, "exhibit_text": str}
+    or None if the response could not be parsed.
+
+    Raises:
+        AIDisabledError — if AI_ENABLED=False
+        AIServiceError  — if the API call fails after retries
+    """
+    if not settings.AI_ENABLED:
+        raise AIDisabledError('AI is disabled.')
+
+    context = _build_structured_chat_context(exhibit)
+    context_json = json.dumps(context)
+    section_names = [s['name'] for s in context.get('sections', [])]
+
+    note_parts = [f'NOTE TEXT: {note.text}']
+    if note.resolution:
+        note_parts.append(f'RESOLUTION: {note.resolution}')
+    note_parts.append(f'NOTE TYPE: {note.get_note_type_display()}')
+    if instruction:
+        note_parts.append(f'USER INSTRUCTION: {instruction}')
+
+    user_prompt = f"""
+TRADE: {exhibit.csi_trade.csi_code} — {exhibit.csi_trade.name}
+
+{chr(10).join(note_parts)}
+
+AVAILABLE SECTIONS (section_name must match one of these exactly):
+{chr(10).join(f'- {name}' for name in section_names)}
+
+EXISTING EXHIBIT (JSON with item PKs — use the pk field for overlap_item_pk):
+{context_json}
+""".strip()
+
+    text = _call_claude(
+        system_prompt=NOTE_TO_SCOPE_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        exhibit=exhibit,
+        request_type=AIRequestLog.RequestType.NOTE_TO_SCOPE,
+    )
+    parsed = _parse_json_response(text)
+    if parsed is None:
+        return None
+
+    status = parsed.get('status')
+    if status == 'overlap':
+        return {
+            'status': 'overlap',
+            'overlap_item_pk': parsed.get('overlap_item_pk'),
+            'explanation': parsed.get('explanation', ''),
+        }
+    elif status == 'created':
+        exhibit_text = parsed.get('exhibit_text', '').strip()
+        section_name = parsed.get('section_name', '').strip()
+        if exhibit_text and section_name:
+            return {
+                'status': 'created',
+                'section_name': section_name,
+                'exhibit_text': exhibit_text,
+            }
+    return None
 
 
 def _linkify_item_refs(message, ref_to_pk):

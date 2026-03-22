@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import models
 from django.shortcuts import get_object_or_404, redirect, render
@@ -79,6 +80,7 @@ def note_list(request, exhibit_pk):
         'project_trades': project_trades,
         'numbers': _item_numbers_for_notes(notes),
         'current_trade': _current_trade(exhibit),
+        'ai_enabled': settings.AI_ENABLED,
     })
 
 
@@ -116,6 +118,7 @@ def note_add(request, exhibit_pk):
         'form': fresh_form,
         'numbers': _item_numbers_for_notes(notes),
         'current_trade': _current_trade(exhibit),
+        'ai_enabled': settings.AI_ENABLED,
     })
 
 

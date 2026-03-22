@@ -488,3 +488,33 @@ Track progress phase by phase. Check items off as completed.
 - [x] `chat_with_exhibit()` rewritten: uses `_call_claude_with_tools()` instead of `_call_claude()` + JSON parsing; assistant messages passed as plain text (no JSON wrapping); return interface unchanged *(2026-03-18)*
 - [x] `CHAT_SYSTEM_PROMPT` simplified: removed JSON OUTPUT FORMAT section, replaced with tool usage instructions *(2026-03-18)*
 - [x] Tests: `_tool_calls_to_changes` (add/edit/delete/mixed/empty), `_call_claude_with_tools` (success/retry/failure/tools-passed), chat tests updated for tool-based mocks — 298 tests passing *(2026-03-18)*
+
+### Step 5: Phase 2 — New AI Capabilities
+
+#### Bulk Section Rewrite
+- [x] `REWRITE_SECTION_SYSTEM_PROMPT` in `ai_services/prompts.py`: rewrites all items in one API call, returns JSON with PKs *(2026-03-21)*
+- [x] `rewrite_section_items(section, exhibit, instruction)` service function: sends all non-pending items, returns `[{pk, exhibit_text}]` *(2026-03-21)*
+- [x] `section_rewrite` view: applies rewrites as pending review items *(2026-03-21)*
+- [x] `section.html` popover extended: two-action layout — "Generate Item" (existing) + "Rewrite All Items" (new) *(2026-03-21)*
+- [x] URL: `<int:pk>/sections/<int:section_pk>/rewrite/` *(2026-03-21)*
+- [x] Tests: rewrites items as pending, empty instruction no-op, AI failure no-op, company scoping, skips pending items, skips unknown PKs — 8 tests *(2026-03-21)*
+
+#### Note-to-Scope AI Conversion
+- [x] `NOTE_TO_SCOPE_SYSTEM_PROMPT` in `ai_services/prompts.py`: checks overlap first, then generates item *(2026-03-21)*
+- [x] `convert_note_to_scope(note, exhibit)` service function: overlap check + generation, considers resolution text *(2026-03-21)*
+- [x] `note_to_scope_ai` view: handles overlap (returns overlap template) and created (pending item + auto-resolve note) *(2026-03-21)*
+- [x] `note_overlap.html` template: shows overlapping item, "Edit Existing" / "Add New Anyway" buttons *(2026-03-21)*
+- [x] ✨ icon added to `note_card.html` for open notes (next to edit pencil) *(2026-03-21)*
+- [x] `ai_enabled` context added to `note_list` and `note_add` views *(2026-03-21)*
+- [x] URL: `<int:pk>/notes/<int:note_pk>/convert-ai/` *(2026-03-21)*
+- [x] Tests: created flow (pending item + note resolved), overlap flow, already-resolved error, section fallback, company scoping — 9 tests *(2026-03-21)*
+
+#### Chat Tool: Note-to-Scope Batch Conversion
+- [x] `convert_note_to_scope` tool added to `CHAT_TOOLS` (note_pk, section_name, text, level) *(2026-03-21)*
+- [x] `_tool_calls_to_changes()` handles `convert_note_to_scope` → `convert_note` action *(2026-03-21)*
+- [x] `_apply_proposed_changes()` handles `convert_note` action: creates pending item, auto-resolves note *(2026-03-21)*
+- [x] `CHAT_SYSTEM_PROMPT` updated with `convert_note_to_scope` tool documentation *(2026-03-21)*
+- [x] `REWRITE_SECTION` and `NOTE_TO_SCOPE` added to `AIRequestLog.RequestType` (single migration) *(2026-03-21)*
+- [x] Tests: tool call conversion, apply changes with note resolution, skip resolved notes — 3 tests *(2026-03-21)*
+
+**Total: 333 tests passing**

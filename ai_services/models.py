@@ -10,6 +10,8 @@ class AIRequestLog(models.Model):
         EXPAND_ITEM = 'EXPAND_ITEM', 'Expand Item'
         CHAT = 'CHAT', 'Chat'
         COMPLETENESS_CHECK = 'COMPLETENESS_CHECK', 'Completeness Check'
+        REWRITE_SECTION = 'REWRITE_SECTION', 'Rewrite Section'
+        NOTE_TO_SCOPE = 'NOTE_TO_SCOPE', 'Note to Scope'
 
     request_type = models.CharField(max_length=30, choices=RequestType.choices)
     exhibit = models.ForeignKey(
