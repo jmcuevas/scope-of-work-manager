@@ -491,21 +491,22 @@ Track progress phase by phase. Check items off as completed.
 
 ### Step 5: Phase 2 — New AI Capabilities
 
-#### Bulk Section Rewrite
-- [x] `REWRITE_SECTION_SYSTEM_PROMPT` in `ai_services/prompts.py`: rewrites all items in one API call, returns JSON with PKs *(2026-03-21)*
-- [x] `rewrite_section_items(section, exhibit, instruction)` service function: sends all non-pending items, returns `[{pk, exhibit_text}]` *(2026-03-21)*
-- [x] `section_rewrite` view: applies rewrites as pending review items *(2026-03-21)*
-- [x] `section.html` popover extended: two-action layout — "Generate Item" (existing) + "Rewrite All Items" (new) *(2026-03-21)*
-- [x] URL: `<int:pk>/sections/<int:section_pk>/rewrite/` *(2026-03-21)*
-- [x] Tests: rewrites items as pending, empty instruction no-op, AI failure no-op, company scoping, skips pending items, skips unknown PKs — 8 tests *(2026-03-21)*
+#### Unified Section AI Action
+- [x] `SECTION_AI_SYSTEM_PROMPT` in `ai_services/prompts.py`: tool-based prompt for section-scoped AI actions *(2026-03-21)*
+- [x] `section_ai_action(section, exhibit, instruction)` service function: uses `_call_claude_with_tools()` with add/edit/delete tools scoped to a single section; AI determines what to do based on the instruction *(2026-03-21)*
+- [x] `section_ai` view: single endpoint replaces separate generate + rewrite; applies changes via `_apply_proposed_changes()` *(2026-03-21)*
+- [x] `section.html` popover simplified: single text input + "Go" button (was two-form layout with separate generate/rewrite); AI decides the action from the instruction *(2026-03-21)*
+- [x] URL: `<int:pk>/sections/<int:section_pk>/ai/` *(2026-03-21)*
+- [x] `REWRITE_SECTION_SYSTEM_PROMPT` and `rewrite_section_items()` kept for backward compatibility *(2026-03-21)*
+- [x] Tests: add via tool, edit via tool, empty instruction no-op, AI failure no-op, company scoping, service-level tests — 9 tests *(2026-03-21)*
 
 #### Note-to-Scope AI Conversion
 - [x] `NOTE_TO_SCOPE_SYSTEM_PROMPT` in `ai_services/prompts.py`: checks overlap first, then generates item *(2026-03-21)*
 - [x] `convert_note_to_scope(note, exhibit)` service function: overlap check + generation, considers resolution text *(2026-03-21)*
 - [x] `note_to_scope_ai` view: handles overlap (returns overlap template) and created (pending item + auto-resolve note) *(2026-03-21)*
-- [x] `note_overlap.html` template: shows overlapping item, "Edit Existing" / "Add New Anyway" buttons *(2026-03-21)*
-- [x] ✨ icon added to `note_card.html` for open notes (next to edit pencil) *(2026-03-21)*
-- [x] `ai_enabled` context added to `note_list` and `note_add` views *(2026-03-21)*
+- [x] `note_overlap.html` template: shows overlapping item, "Edit Existing" / "Add New Anyway" / dismiss X buttons *(2026-03-21)*
+- [x] ✨ icon on `note_card.html` for open notes: opens inline AI form (bottom of card, same pattern as resolve form) to avoid overflow clipping in scrollable sidebar *(2026-03-21)*
+- [x] `ai_enabled` and `exhibit` context added to `note_list` and `note_add` views *(2026-03-21)*
 - [x] URL: `<int:pk>/notes/<int:note_pk>/convert-ai/` *(2026-03-21)*
 - [x] Tests: created flow (pending item + note resolved), overlap flow, already-resolved error, section fallback, company scoping — 9 tests *(2026-03-21)*
 
@@ -517,4 +518,4 @@ Track progress phase by phase. Check items off as completed.
 - [x] `REWRITE_SECTION` and `NOTE_TO_SCOPE` added to `AIRequestLog.RequestType` (single migration) *(2026-03-21)*
 - [x] Tests: tool call conversion, apply changes with note resolution, skip resolved notes — 3 tests *(2026-03-21)*
 
-**Total: 333 tests passing**
+**Total: 342 tests passing**
