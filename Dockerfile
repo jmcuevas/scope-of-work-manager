@@ -19,7 +19,9 @@ COPY . .
 
 RUN python manage.py collectstatic --noinput
 
-ENV PORT=8000
+COPY start.sh .
+RUN chmod +x start.sh
+
 EXPOSE 8000
 
-CMD python manage.py migrate --noinput && gunicorn scope_manager.wsgi --workers 2 --bind 0.0.0.0:$PORT
+CMD ["/bin/bash", "start.sh"]
