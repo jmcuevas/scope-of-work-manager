@@ -127,6 +127,26 @@ Track completed and pending work in `docs/checklist.md`. Check this at the start
 - `main` — stable, deployable
 - `develop` — active development; merge to `main` at end of each phase
 
+### Versioning
+Follows [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`):
+- **MAJOR** — breaking changes or major rewrites
+- **MINOR** — new features or enhancements
+- **PATCH** — bug fixes
+
+Tag `main` after each merge: `git tag -a vX.Y.Z -m "description"`. Push tags with `git push --tags`.
+
+| Tag | Milestone |
+|-----|-----------|
+| `v1.0.0` | MVP complete (pre-deployment) |
+| `v1.1.0` | Railway deployment config + production settings |
+
+### Deployment
+- **Platform:** Railway (Docker-based)
+- **URL:** https://buyouthd.up.railway.app
+- **Auto-deploy:** push to `main` triggers build + migrate + restart
+- **Config files:** `Dockerfile`, `railway.toml`, `.dockerignore`
+- **Env vars:** managed in Railway dashboard (Variables tab)
+
 ### Development Phases
 1. Foundation + data models ✅
 2. Project dashboard + trade import ✅
