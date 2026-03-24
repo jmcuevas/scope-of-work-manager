@@ -9,7 +9,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 1: Foundation + Data Models (Week 1)
+### Phase 1: Foundation + Data Models (Week 1)
 **Goal**: Auth works, all models migrated, admin seeded, CI passes, factories create valid test data.
 
 ### Project Setup
@@ -50,7 +50,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 2: Project Dashboard + Trade Setup (Week 2)
+### Phase 2: Project Dashboard + Trade Setup (Week 2)
 **Goal**: PM can create a project, paste 15+ trades from a spreadsheet, see a clean buyout dashboard, and update statuses — all without full page reloads.
 
 ### Project List
@@ -99,7 +99,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 3: Scope Exhibit Editor (Weeks 3–4)
+### Phase 3: Scope Exhibit Editor (Weeks 3–4)
 **Goal**: Full editor workflow — pick template → clone → edit sections/items → reorder → indent/outdent. Hierarchical numbering correct after every operation.
 
 ### Week 3 — Template picker + clone + basic editor
@@ -182,7 +182,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 4: PDF Export (Week 5, first half)
+### Phase 4: PDF Export (Week 5, first half)
 **Goal**: Clicking "Export PDF" downloads a clean, professional Exhibit A. Tested at multiple sizes.
 
 ### Setup
@@ -224,7 +224,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 5: Notes & Cross-Trade Tracking (Week 5–6)
+### Phase 5: Notes & Cross-Trade Tracking (Week 5–6)
 **Goal**: Notes appear in all relevant trade contexts. Open question count accurate. Dashboard shows open question count.
 
 > Note model already exists from Phase 1 — building UI only.
@@ -271,7 +271,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 6: AI Scope Assistant (Week 6–7)
+### Phase 6: AI Scope Assistant (Week 6–7)
 **Goal**: Both AI functions work end-to-end. Failures degrade gracefully. PM can complete any exhibit with or without AI.
 
 > `AI_ENABLED` flag and `ANTHROPIC_API_KEY` are already in settings. `ai_services/` app already exists — building the service layer and UI on top.
@@ -319,7 +319,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 7: Final Review + Hardening + Launch (Weeks 7–8)
+### Phase 7: Final Review + Hardening + Launch (Weeks 7–8)
 
 ### Week 7: Final Review
 - [x] Review generation service (`reviews/services.py`): open notes check, cross-trade notes check, checklist items check; re-running replaces previous review atomically *(2026-03-08)*
@@ -338,7 +338,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 8: AI Assistant Redesign (Post-MVP)
+### Phase 8: AI Assistant Redesign (Post-MVP)
 **Goal**: Upgrade the AI experience from a one-shot "Generate Scope" button to a fully interactive assistant with pending review workflow, contextual quick actions, and a conversational chat overlay.
 
 ### Data Model Changes
@@ -432,7 +432,7 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## Phase 9: AI Architecture Upgrade
+### Phase 9: AI Architecture Upgrade
 **Goal**: Upgrade the AI from a stateless assistant to a persistent, tool-using system. Server-side chat memory, structured context, and Claude tool use. See `## AI Architecture Roadmap` in `docs/specs.md` for full details.
 
 ### Step 1: Server-Side Chat History (Roadmap 1.1)
