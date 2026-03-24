@@ -1078,8 +1078,10 @@ New AI-powered features. Each is standalone.
 - [ ] **Few-Shot Examples in Prompts** — Add 2-3 concrete input/output examples to each system prompt
 - [ ] **Company-Configurable Language Rules** — `scope_language_rules` on Company model, injected into prompts alongside `_LANGUAGE_RULES`
 - [ ] **Project-Type-Specific Prompt Context** — Domain knowledge per ProjectType (e.g., lab TI → fume hoods, BMS integration)
+- [ ] **File Attachments** — File storage scoped to projects, trades, notes, and (future) bidders. Project-level files (drawings, specs, RFIs) and trade-level files (cut sheets, submittals) stored in S3/R2 via a generic `Attachment` model (`content_type` + `object_id` FK pattern). Files surfaced in the UI on the relevant detail page. Long-term: selected files passable as context to AI (filenames + metadata initially; content extraction/embedding deferred). Bidder file attachments held for bid leveling phase.
 
 ### AI Agent Architecture (Future)
+
 
 - [ ] **Multi-Step Autonomous Scope Building** — Agent loop with human checkpoints at key decision points
 - [ ] **Context Window Management** — Token counting, summarization, exhibit context compression

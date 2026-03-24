@@ -96,9 +96,16 @@ urlpatterns = [
     # Section list (GET refresh endpoint)
     path('<int:pk>/sections/', views.section_list, name='section_list'),
 
-    # AI chat overlay
+    # AI chat
     path('<int:pk>/chat/', views.ai_chat, name='ai_chat'),
     path('<int:pk>/chat/send/', views.ai_chat_send, name='ai_chat_send'),
+    path('<int:pk>/chat/new/', views.ai_chat_new, name='ai_chat_new'),
+    path('<int:pk>/chat/sessions/', views.ai_chat_sessions, name='ai_chat_sessions'),
+    path('<int:pk>/chat/<int:session_pk>/', views.ai_chat_switch, name='ai_chat_switch'),
+    path('<int:pk>/chat/<int:session_pk>/title/', views.ai_chat_session_title, name='ai_chat_session_title'),
+    path('<int:pk>/chat/<int:session_pk>/rename-form/', views.ai_chat_rename_form, name='ai_chat_rename_form'),
+    path('<int:pk>/chat/<int:session_pk>/rename/', views.ai_chat_rename, name='ai_chat_rename'),
+    path('<int:pk>/chat/<int:session_pk>/delete/', views.ai_chat_delete, name='ai_chat_delete'),
     path(
         '<int:pk>/sections/<int:section_pk>/items/<int:item_pk>/rewrite/',
         views.item_rewrite,

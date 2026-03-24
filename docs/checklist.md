@@ -4,6 +4,11 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
+## v1.0.0 — MVP
+*Phases 1–9. Core app: auth, project dashboard, scope editor, PDF export, notes tracking, AI assistant (redesign + architecture upgrade), final review.*
+
+---
+
 ## Phase 1: Foundation + Data Models (Week 1)
 **Goal**: Auth works, all models migrated, admin seeded, CI passes, factories create valid test data.
 
@@ -519,3 +524,78 @@ Track progress phase by phase. Check items off as completed.
 - [x] Tests: tool call conversion, apply changes with note resolution, skip resolved notes — 3 tests *(2026-03-21)*
 
 **Total: 342 tests passing**
+
+---
+
+## v1.0.1 — Railway Deployment
+*Docker-based deployment to Railway. Production settings hardened. App live at https://buyouthd.up.railway.app.*
+
+- [x] `Dockerfile` with Python 3.12, gunicorn, WeasyPrint system dependencies
+- [x] `railway.toml` with build + start config
+- [x] `.dockerignore`
+- [x] Production settings: `ALLOWED_HOSTS`, SSL redirect, `SECRET_KEY` via env var, WhiteNoise static files
+- [x] Auto-deploy: push to `main` triggers build + migrate + restart
+- [ ] Seed production data: company, users, real trade templates, checklist items
+- [ ] Pilot launch: 2–3 PMs + PEs onboarded, onboarding guide written
+
+---
+
+## v1.1.0 — [Feature Name]
+*Description of this release.*
+
+### Documentation Maintenance *(2026-03-22)*
+
+- [x] Cleaned up and reorganized CLAUDE.md, specs.md, and checklist.md — removed stale content, fixed inaccuracies, restructured Pending Implementation
+
+### Multi-Session Chat *(2026-03-23)*
+
+#### Data Model
+- [x] Add `title` field (nullable `CharField(max_length=200)`) to `ChatSession` *(2026-03-23)*
+- [x] Generate migration *(2026-03-23)*
+- [x] Update `ChatSession.__str__` to use title if set *(2026-03-23)*
+
+#### Backend
+- [x] Update `ai_chat` view: scope session lookup to `(exhibit, user)` — each user gets their own session history *(2026-03-23)*
+- [x] Update `ai_chat_send` view: `get_or_create` scoped to `(exhibit, user)` instead of `exhibit` alone *(2026-03-23)*
+- [x] Add `ai_chat_new` view (`POST /exhibits/<pk>/chat/new/`) — creates a new `ChatSession` for the current user+exhibit and redirects to the chat panel loaded with the new session *(2026-03-23)*
+- [x] Add `ai_chat_switch` view (`GET /exhibits/<pk>/chat/<session_pk>/`) — loads the chat panel for a specific session (must belong to request.user) *(2026-03-23)*
+- [x] Add session list endpoint (`GET /exhibits/<pk>/chat/sessions/`) — returns HTMX partial with the user's sessions for this exhibit *(2026-03-23)*
+- [x] Auto-title sessions: on first assistant reply, set `session.title` to a truncated version of the first user message (50 chars) *(2026-03-23)*
+
+#### UI
+- [x] Session name in header as dropdown trigger — replaces separate icon buttons *(2026-03-23)*
+- [x] Dropdown: New chat, past sessions list, Rename, Delete *(2026-03-23)*
+- [x] Inline rename form — swaps title area; save/cancel/Escape to restore *(2026-03-23)*
+- [x] Delete with confirmation dialog; loads next session or empty state *(2026-03-23)*
+
+#### Cleanup / Retention
+- [x] Management command `prune_chat_sessions` — deletes sessions with no messages older than 90 days; dry-run flag *(2026-03-23)*
+- [x] Document the command in CLAUDE.md under Commands *(2026-03-23)*
+
+#### Tests
+- [x] Each user gets isolated sessions — user A cannot see or load user B's sessions for the same exhibit *(2026-03-23)*
+- [x] New chat creates a fresh session; previous session is preserved and accessible via session list *(2026-03-23)*
+- [x] `ai_chat_switch` returns 404 for sessions belonging to another user *(2026-03-23)*
+- [x] Auto-title fires on first assistant reply; subsequent replies do not overwrite it *(2026-03-23)*
+- [x] `prune_chat_sessions` deletes only empty sessions older than 90 days *(2026-03-23)*
+- [x] Rename updates title; truncates to 200 chars; blocks other users *(2026-03-23)*
+- [x] Delete removes session; loads next session or empty state; blocks other users *(2026-03-23)*
+
+### File Attachments
+
+- [ ] `Attachment` model with generic FK (`content_type` + `object_id`)
+- [ ] S3/R2 storage backend; file upload/delete views
+- [ ] Project-level and trade-level file UI
+- [ ] Note attachments
+- [ ] Tests
+
+### Buyout Dashboard Filtering & Grouping
+
+- [ ] Filter bar: filter trades by status, CSI division, and trade name text search
+- [ ] Active filters shown as removable chips; state preserved in URL query params
+- [ ] Grouping toggle: flat list (default), group by CSI Division, group by status
+- [ ] Collapsible group headers with trade count; collapse state persisted in `localStorage`
+- [ ] Sortable column headers (Trade Name, CSI Code, Status, Budget)
+- [ ] Summary bar: aggregate counts per status, updates with active filters
+- [ ] Tests
+

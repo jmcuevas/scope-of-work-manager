@@ -1,0 +1,22 @@
+<div id="chat-session-title-area">
+  <form hx-post="{% url 'exhibits:ai_chat_rename' exhibit.pk session.pk %}"
+        hx-target="#chat-session-title-area"
+        hx-swap="outerHTML"
+        class="flex items-center gap-2">
+    {% csrf_token %}
+    <input type="text"
+           name="title"
+           value="{{ session.title }}"
+           autofocus
+           maxlength="200"
+           class="text-sm font-semibold text-gray-800 border-b border-primary-400 focus:outline-none bg-transparent w-40"
+           onkeydown="if(event.key==='Escape'){ event.preventDefault(); htmx.ajax('GET', '{% url 'exhibits:ai_chat_session_title' exhibit.pk session.pk %}', {target:'#chat-session-title-area', swap:'outerHTML'}); }">
+    <button type="submit"
+            class="text-xs font-medium text-primary-600 hover:text-primary-800 transition-colors">Save</button>
+    <button type="button"
+            hx-get="{% url 'exhibits:ai_chat_session_title' exhibit.pk session.pk %}"
+            hx-target="#chat-session-title-area"
+            hx-swap="outerHTML"
+            class="text-xs text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
+  </form>
+</div>

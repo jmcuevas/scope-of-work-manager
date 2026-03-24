@@ -1457,7 +1457,7 @@ class TestAIChatSendView:
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result = {'message': 'Response.', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'New message'})
+            client.post(url, {'message': 'New message', 'session_pk': session.pk})
         call_args = mock_chat.call_args[0]
         conversation = call_args[1]
         assert conversation[0]['content'] == 'Earlier message'
@@ -1488,11 +1488,13 @@ class TestAIChatSendView:
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         result1 = {'message': 'Reply 1', 'proposed_changes': []}
+        # First send creates a new session (no session_pk)
         with patch('exhibits.views.chat_with_exhibit', return_value=result1):
             client.post(url, {'message': 'Message 1'})
+        session = ChatSession.objects.filter(exhibit=exhibit, user=user).first()
         result2 = {'message': 'Reply 2', 'proposed_changes': []}
         with patch('exhibits.views.chat_with_exhibit', return_value=result2) as mock_chat:
-            client.post(url, {'message': 'Message 2'})
+            client.post(url, {'message': 'Message 2', 'session_pk': session.pk})
         conversation = mock_chat.call_args[0][1]
         assert len(conversation) == 3
         assert conversation[0] == {'role': 'user', 'content': 'Message 1'}
@@ -1558,6 +1560,345 @@ class TestAIChatSendView:
             client.post(url, {'message': 'Hello'})
         conversation = mock_chat.call_args[0][1]
         assert conversation[0]['content'] == 'Hello'
+
+    def test_session_scoped_to_user(self, client):
+        """Two users each get their own session for the same exhibit."""
+        from ai_services.models import ChatSession
+        user_a = PMUserFactory()
+        user_b = PMUserFactory(company=user_a.company)
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        result = {'message': 'Hi', 'proposed_changes': []}
+        # User A sends a message
+        _login(client, user_a)
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            client.post(reverse('exhibits:ai_chat_send', args=[exhibit.pk]), {'message': 'From A'})
+        # User B sends a message
+        _login(client, user_b)
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            client.post(reverse('exhibits:ai_chat_send', args=[exhibit.pk]), {'message': 'From B'})
+        assert ChatSession.objects.filter(exhibit=exhibit, user=user_a).count() == 1
+        assert ChatSession.objects.filter(exhibit=exhibit, user=user_b).count() == 1
+        assert ChatSession.objects.filter(exhibit=exhibit).count() == 2
+
+    def test_auto_title_set_on_first_send(self, client):
+        """Session.title is set via generate_chat_title on the first send."""
+        from ai_services.models import ChatSession
+        user, exhibit, section = self._setup(client)
+        result = {'message': 'OK', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result), \
+             patch('exhibits.views.generate_chat_title', return_value='Seismic Bracing MEP Supports') as mock_title:
+            client.post(
+                reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
+                {'message': 'Add seismic bracing to all MEP supports on this project'},
+            )
+        session = ChatSession.objects.get(exhibit=exhibit, user=user)
+        assert session.title == 'Seismic Bracing MEP Supports'
+        mock_title.assert_called_once_with('Add seismic bracing to all MEP supports on this project')
+
+    def test_auto_title_not_overwritten_on_second_send(self, client):
+        """Sending a second message does not call generate_chat_title again."""
+        from ai_services.models import ChatSession
+        user, exhibit, section = self._setup(client)
+        result = {'message': 'OK', 'proposed_changes': []}
+        # First send creates session and sets title
+        with patch('exhibits.views.chat_with_exhibit', return_value=result), \
+             patch('exhibits.views.generate_chat_title', return_value='First Chat Title'):
+            client.post(
+                reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
+                {'message': 'First message'},
+            )
+        session = ChatSession.objects.get(exhibit=exhibit, user=user)
+        # Second send should NOT call generate_chat_title again
+        with patch('exhibits.views.chat_with_exhibit', return_value=result), \
+             patch('exhibits.views.generate_chat_title', return_value='New Title') as mock_title:
+            client.post(
+                reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
+                {'message': 'Second message', 'session_pk': session.pk},
+            )
+        mock_title.assert_not_called()
+        session.refresh_from_db()
+        assert session.title == 'First Chat Title'
+
+    def test_send_with_explicit_session_pk(self, client):
+        """Passing session_pk routes the message to that specific session."""
+        from ai_services.models import ChatMessage, ChatSession
+        user, exhibit, section = self._setup(client)
+        s1 = ChatSession.objects.create(exhibit=exhibit, user=user)
+        s2 = ChatSession.objects.create(exhibit=exhibit, user=user)
+        result = {'message': 'Replied', 'proposed_changes': []}
+        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+            client.post(
+                reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
+                {'message': 'For session 2', 'session_pk': s2.pk},
+            )
+        assert ChatMessage.objects.filter(session=s2).exists()
+        assert not ChatMessage.objects.filter(session=s1).exists()
+
+
+# ---------------------------------------------------------------------------
+# AI chat new / switch / sessions views
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestAIChatNewView:
+
+    def test_does_not_create_session_immediately(self, client):
+        """New chat is lazy — no session created until the first message is sent."""
+        from ai_services.models import ChatSession
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        ChatSession.objects.create(exhibit=exhibit, user=user)
+        url = reverse('exhibits:ai_chat_new', args=[exhibit.pk])
+        response = client.post(url)
+        assert response.status_code == 200
+        # Still only one session — nothing created yet
+        assert ChatSession.objects.filter(exhibit=exhibit, user=user).count() == 1
+
+    def test_returns_chat_panel(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        url = reverse('exhibits:ai_chat_new', args=[exhibit.pk])
+        response = client.post(url)
+        assert response.status_code == 200
+        assert b'chat-messages' in response.content
+
+    def test_requires_login(self, client):
+        user = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user)
+        url = reverse('exhibits:ai_chat_new', args=[exhibit.pk])
+        response = client.post(url)
+        assert response.status_code == 302
+
+    def test_company_isolation(self, client):
+        user_b = PMUserFactory()
+        _login(client, user_b)
+        user_a = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        url = reverse('exhibits:ai_chat_new', args=[exhibit.pk])
+        response = client.post(url)
+        assert response.status_code == 404
+
+
+@pytest.mark.django_db
+class TestAIChatSwitchView:
+
+    def test_loads_session_messages(self, client):
+        from ai_services.models import ChatMessage, ChatSession
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatMessage.objects.create(session=session, role='user', content='Old message')
+        url = reverse('exhibits:ai_chat_switch', args=[exhibit.pk, session.pk])
+        response = client.get(url)
+        assert response.status_code == 200
+        assert b'Old message' in response.content
+
+    def test_other_user_session_returns_404(self, client):
+        """A user cannot load another user's session, even in the same company."""
+        from ai_services.models import ChatSession
+        user_a = PMUserFactory()
+        user_b = PMUserFactory(company=user_a.company)
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        session_a = ChatSession.objects.create(exhibit=exhibit, user=user_a)
+        _login(client, user_b)
+        url = reverse('exhibits:ai_chat_switch', args=[exhibit.pk, session_a.pk])
+        response = client.get(url)
+        assert response.status_code == 404
+
+    def test_company_isolation(self, client):
+        from ai_services.models import ChatSession
+        user_b = PMUserFactory()
+        _login(client, user_b)
+        user_a = PMUserFactory()
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user_a)
+        url = reverse('exhibits:ai_chat_switch', args=[exhibit.pk, session.pk])
+        response = client.get(url)
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# AI chat rename / delete views
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestAIChatRenameDeleteViews:
+
+    def _setup(self, client):
+        user = PMUserFactory()
+        _login(client, user)
+        _, exhibit = _make_trade_with_exhibit(user)
+        from ai_services.models import ChatSession
+        session = ChatSession.objects.create(exhibit=exhibit, user=user, title='Old title')
+        return user, exhibit, session
+
+    # --- rename form ---
+
+    def test_rename_form_returns_200(self, client):
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_rename_form', args=[exhibit.pk, session.pk])
+        response = client.get(url)
+        assert response.status_code == 200
+        assert b'Old title' in response.content
+
+    def test_rename_form_other_user_returns_404(self, client):
+        from ai_services.models import ChatSession
+        user_a = PMUserFactory()
+        user_b = PMUserFactory(company=user_a.company)
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user_a)
+        _login(client, user_b)
+        url = reverse('exhibits:ai_chat_rename_form', args=[exhibit.pk, session.pk])
+        response = client.get(url)
+        assert response.status_code == 404
+
+    # --- rename POST ---
+
+    def test_rename_updates_title(self, client):
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_rename', args=[exhibit.pk, session.pk])
+        response = client.post(url, {'title': 'New title'})
+        assert response.status_code == 200
+        session.refresh_from_db()
+        assert session.title == 'New title'
+
+    def test_rename_truncates_to_200_chars(self, client):
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_rename', args=[exhibit.pk, session.pk])
+        client.post(url, {'title': 'x' * 300})
+        session.refresh_from_db()
+        assert len(session.title) == 200
+
+    def test_rename_returns_title_area_partial(self, client):
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_rename', args=[exhibit.pk, session.pk])
+        response = client.post(url, {'title': 'Updated'})
+        assert response.status_code == 200
+        assert b'chat-session-title-area' in response.content
+        assert b'Updated' in response.content
+
+    def test_rename_other_user_returns_404(self, client):
+        from ai_services.models import ChatSession
+        user_a = PMUserFactory()
+        user_b = PMUserFactory(company=user_a.company)
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user_a)
+        _login(client, user_b)
+        url = reverse('exhibits:ai_chat_rename', args=[exhibit.pk, session.pk])
+        response = client.post(url, {'title': 'Hacked'})
+        assert response.status_code == 404
+
+    # --- session title (cancel restore) ---
+
+    def test_session_title_returns_title_area(self, client):
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_session_title', args=[exhibit.pk, session.pk])
+        response = client.get(url)
+        assert response.status_code == 200
+        assert b'chat-session-title-area' in response.content
+        assert b'Old title' in response.content
+
+    # --- delete ---
+
+    def test_delete_removes_session(self, client):
+        from ai_services.models import ChatSession
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_delete', args=[exhibit.pk, session.pk])
+        client.post(url)
+        assert not ChatSession.objects.filter(pk=session.pk).exists()
+
+    def test_delete_loads_next_session(self, client):
+        from ai_services.models import ChatMessage, ChatSession
+        user, exhibit, session1 = self._setup(client)
+        session2 = ChatSession.objects.create(exhibit=exhibit, user=user, title='Session 2')
+        ChatMessage.objects.create(session=session2, role='user', content='From session 2')
+        url = reverse('exhibits:ai_chat_delete', args=[exhibit.pk, session1.pk])
+        response = client.post(url)
+        assert response.status_code == 200
+        assert b'From session 2' in response.content
+
+    def test_delete_last_session_returns_empty_panel(self, client):
+        from ai_services.models import ChatSession
+        user, exhibit, session = self._setup(client)
+        url = reverse('exhibits:ai_chat_delete', args=[exhibit.pk, session.pk])
+        response = client.post(url)
+        assert response.status_code == 200
+        assert b'chat-messages' in response.content
+        assert not ChatSession.objects.filter(exhibit=exhibit, user=user).exists()
+
+    def test_delete_other_user_returns_404(self, client):
+        from ai_services.models import ChatSession
+        user_a = PMUserFactory()
+        user_b = PMUserFactory(company=user_a.company)
+        _, exhibit = _make_trade_with_exhibit(user_a)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user_a)
+        _login(client, user_b)
+        url = reverse('exhibits:ai_chat_delete', args=[exhibit.pk, session.pk])
+        response = client.post(url)
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# prune_chat_sessions management command
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestPruneChatSessionsCommand:
+
+    def test_deletes_empty_old_sessions(self):
+        from django.core.management import call_command
+        from django.utils import timezone
+        from datetime import timedelta
+        from ai_services.models import ChatSession
+        user = PMUserFactory()
+        exhibit = ScopeExhibitFactory(company=user.company, created_by=user, last_edited_by=user)
+        old_session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatSession.objects.filter(pk=old_session.pk).update(
+            updated_at=timezone.now() - timedelta(days=100)
+        )
+        call_command('prune_chat_sessions', '--days=90')
+        assert not ChatSession.objects.filter(pk=old_session.pk).exists()
+
+    def test_preserves_sessions_with_messages(self):
+        from django.core.management import call_command
+        from django.utils import timezone
+        from datetime import timedelta
+        from ai_services.models import ChatMessage, ChatSession
+        user = PMUserFactory()
+        exhibit = ScopeExhibitFactory(company=user.company, created_by=user, last_edited_by=user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatMessage.objects.create(session=session, role='user', content='Keep me')
+        ChatSession.objects.filter(pk=session.pk).update(
+            updated_at=timezone.now() - timedelta(days=100)
+        )
+        call_command('prune_chat_sessions', '--days=90')
+        assert ChatSession.objects.filter(pk=session.pk).exists()
+
+    def test_preserves_recent_empty_sessions(self):
+        from django.core.management import call_command
+        from ai_services.models import ChatSession
+        user = PMUserFactory()
+        exhibit = ScopeExhibitFactory(company=user.company, created_by=user, last_edited_by=user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        call_command('prune_chat_sessions', '--days=90')
+        assert ChatSession.objects.filter(pk=session.pk).exists()
+
+    def test_dry_run_does_not_delete(self):
+        from django.core.management import call_command
+        from django.utils import timezone
+        from datetime import timedelta
+        from ai_services.models import ChatSession
+        user = PMUserFactory()
+        exhibit = ScopeExhibitFactory(company=user.company, created_by=user, last_edited_by=user)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        ChatSession.objects.filter(pk=session.pk).update(
+            updated_at=timezone.now() - timedelta(days=100)
+        )
+        call_command('prune_chat_sessions', '--days=90', '--dry-run')
+        assert ChatSession.objects.filter(pk=session.pk).exists()
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items, section_ai_action
+from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_chat_title, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items, section_ai_action
 from django.conf import settings
 from django.utils import timezone
 from notes.forms import NoteForm
@@ -1321,10 +1321,113 @@ def _apply_proposed_changes(exhibit, changes, user):
 def ai_chat(request, pk):
     exhibit = _company_exhibit_or_404(pk, request.user)
     from ai_services.models import ChatSession
-    session = ChatSession.objects.filter(exhibit=exhibit).first()
+    session = ChatSession.objects.filter(exhibit=exhibit, user=request.user).first()
     messages = list(session.messages.order_by('created_at')) if session else []
     ctx = _ai_panel_context(exhibit)
     ctx['messages'] = messages
+    ctx['session'] = session
+    ctx['sessions'] = ChatSession.objects.filter(exhibit=exhibit, user=request.user).order_by('-updated_at')
+    return render(request, 'exhibits/partials/chat_side_panel.html', ctx)
+
+
+@login_required
+@require_POST
+def ai_chat_new(request, pk):
+    """Show a fresh empty chat panel — session is created lazily on first send."""
+    from ai_services.models import ChatSession
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    ctx = _ai_panel_context(exhibit)
+    ctx['messages'] = []
+    ctx['session'] = None
+    ctx['sessions'] = ChatSession.objects.filter(exhibit=exhibit, user=request.user).order_by('-updated_at')
+    return render(request, 'exhibits/partials/chat_side_panel.html', ctx)
+
+
+@login_required
+def ai_chat_switch(request, pk, session_pk):
+    """Load a specific chat session (must belong to request.user)."""
+    from ai_services.models import ChatSession
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
+    messages = list(session.messages.order_by('created_at'))
+    ctx = _ai_panel_context(exhibit)
+    ctx['messages'] = messages
+    ctx['session'] = session
+    ctx['sessions'] = ChatSession.objects.filter(exhibit=exhibit, user=request.user).order_by('-updated_at')
+    return render(request, 'exhibits/partials/chat_side_panel.html', ctx)
+
+
+@login_required
+def ai_chat_sessions(request, pk):
+    """Return HTMX partial with the session list for the current user+exhibit."""
+    from ai_services.models import ChatSession
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    sessions = ChatSession.objects.filter(exhibit=exhibit, user=request.user).order_by('-updated_at')
+    session_pk = request.GET.get('active')
+    return render(request, 'exhibits/partials/chat_session_list.html', {
+        'exhibit': exhibit,
+        'sessions': sessions,
+        'active_session_pk': int(session_pk) if session_pk else None,
+    })
+
+
+def _session_title_context(exhibit, session, user):
+    from ai_services.models import ChatSession
+    return {
+        'exhibit': exhibit,
+        'session': session,
+        'sessions': ChatSession.objects.filter(exhibit=exhibit, user=user).order_by('-updated_at'),
+    }
+
+
+@login_required
+def ai_chat_session_title(request, pk, session_pk):
+    """Return the session title area partial (used for rename cancel / restore)."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    from ai_services.models import ChatSession
+    session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
+    return render(request, 'exhibits/partials/chat_session_title_area.html',
+                  _session_title_context(exhibit, session, request.user))
+
+
+@login_required
+def ai_chat_rename_form(request, pk, session_pk):
+    """Return inline rename form that replaces the session title area."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    from ai_services.models import ChatSession
+    session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
+    return render(request, 'exhibits/partials/chat_session_rename_form.html',
+                  {'exhibit': exhibit, 'session': session})
+
+
+@login_required
+@require_POST
+def ai_chat_rename(request, pk, session_pk):
+    """Save new session title, return updated title area partial."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    from ai_services.models import ChatSession
+    session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
+    title = request.POST.get('title', '').strip()[:200]
+    session.title = title
+    session.save(update_fields=['title'])
+    return render(request, 'exhibits/partials/chat_session_title_area.html',
+                  _session_title_context(exhibit, session, request.user))
+
+
+@login_required
+@require_POST
+def ai_chat_delete(request, pk, session_pk):
+    """Delete the session, load the next most recent session or empty state."""
+    exhibit = _company_exhibit_or_404(pk, request.user)
+    from ai_services.models import ChatSession
+    session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
+    session.delete()
+    next_session = ChatSession.objects.filter(exhibit=exhibit, user=request.user).order_by('-updated_at').first()
+    messages = list(next_session.messages.order_by('created_at')) if next_session else []
+    ctx = _ai_panel_context(exhibit)
+    ctx['messages'] = messages
+    ctx['session'] = next_session
+    ctx['sessions'] = ChatSession.objects.filter(exhibit=exhibit, user=request.user).order_by('-updated_at')
     return render(request, 'exhibits/partials/chat_side_panel.html', ctx)
 
 
@@ -1353,11 +1456,14 @@ def ai_chat_send(request, pk):
     if context_parts:
         user_message = '[Context: ' + '; '.join(context_parts) + ']\n\n' + user_message
 
-    # Get or create chat session for this exhibit
-    session, _ = ChatSession.objects.get_or_create(
-        exhibit=exhibit,
-        defaults={'user': request.user},
-    )
+    # Route to session — create lazily on first send if no session exists yet
+    session_pk = request.POST.get('session_pk')
+    new_session_pk = None
+    if session_pk:
+        session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
+    else:
+        session = ChatSession.objects.create(exhibit=exhibit, user=request.user)
+        new_session_pk = session.pk
 
     # Save user message
     ChatMessage.objects.create(
@@ -1401,13 +1507,22 @@ def ai_chat_send(request, pk):
         changes_applied_pks=changes_applied_pks,
     )
 
-    response = render(request, 'exhibits/partials/ai_chat_messages.html', {
+    # Auto-title the session from the first user message (once only)
+    if not session.title:
+        session.title = generate_chat_title(user_message)
+        session.save(update_fields=['title', 'updated_at'])
+
+    ctx = {
         'user_message': user_message,
         'assistant_message': assistant_message,
         'changes_applied': changes_applied,
         'changes_applied_pks': changes_applied_pks,
         'error': error,
-    })
+        'new_session_pk': new_session_pk,
+    }
+    if new_session_pk:
+        ctx.update(_session_title_context(exhibit, session, request.user))
+    response = render(request, 'exhibits/partials/ai_chat_messages.html', ctx)
     if changes_applied:
         response['HX-Trigger'] = 'pendingChanged'
     return response

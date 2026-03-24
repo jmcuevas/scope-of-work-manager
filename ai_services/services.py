@@ -397,6 +397,41 @@ def _build_structured_chat_context(exhibit):
 # Public service functions
 # ---------------------------------------------------------------------------
 
+def generate_chat_title(message):
+    """
+    Return a short title (4-6 words) summarizing the first chat message.
+    Falls back to a 50-char truncation if AI is disabled or the call fails.
+    """
+    if not getattr(settings, 'AI_ENABLED', False):
+        return message[:50].strip()
+
+    system = (
+        'You generate ultra-short chat session titles. '
+        'Given the user\'s first message, reply with ONLY a 4-6 word title that captures the topic. '
+        'No punctuation at the end. No quotes. Plain text only.'
+    )
+    try:
+        client = _get_client()
+        start = time.monotonic()
+        response = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=20,
+            system=system,
+            messages=[{'role': 'user', 'content': message[:500]}],
+        )
+        latency_ms = int((time.monotonic() - start) * 1000)
+        AIRequestLog.objects.create(
+            request_type=AIRequestLog.RequestType.CHAT,
+            success=True,
+            tokens_used=response.usage.input_tokens + response.usage.output_tokens,
+            latency_ms=latency_ms,
+        )
+        title = response.content[0].text.strip()[:200]
+        return title or message[:50].strip()
+    except Exception:
+        return message[:50].strip()
+
+
 def generate_scope_from_description(exhibit):
     """
     Generate scope items for an exhibit based on its scope description,

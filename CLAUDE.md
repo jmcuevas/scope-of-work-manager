@@ -45,6 +45,10 @@ DB_USER=$(whoami) DB_PASSWORD="" .venv/bin/pytest core/tests.py::TestClassName::
 
 # Create superuser
 DB_USER=$(whoami) DB_PASSWORD="" .venv/bin/python manage.py createsuperuser
+
+# Prune empty chat sessions older than 90 days (add --dry-run to preview)
+DB_USER=$(whoami) DB_PASSWORD="" .venv/bin/python manage.py prune_chat_sessions
+DB_USER=$(whoami) DB_PASSWORD="" .venv/bin/python manage.py prune_chat_sessions --days=30 --dry-run
 ```
 
 **Note**: No `.env` file is set up locally. DB credentials are passed inline as shown above (`DB_USER=$(whoami) DB_PASSWORD=""`). For production, use a `.env` file following `.env.example`.

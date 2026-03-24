@@ -1,4 +1,8 @@
 {% load exhibit_tags %}
+{% if new_session_pk %}
+<input type="hidden" id="session-pk-input" name="session_pk" value="{{ new_session_pk }}" hx-swap-oob="true">
+{% include "exhibits/partials/chat_session_title_area.html" with oob=True %}
+{% endif %}
 <!-- User message -->
 <div class="flex justify-end">
   <div class="max-w-[80%] bg-primary-600 text-white rounded-2xl rounded-br-sm px-4 py-3">

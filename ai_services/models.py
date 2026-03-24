@@ -48,6 +48,7 @@ class ChatSession(models.Model):
         on_delete=models.CASCADE,
         related_name='chat_sessions',
     )
+    title = models.CharField(max_length=200, blank=True)
     context_type = models.CharField(max_length=20, default='exhibit')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -56,7 +57,8 @@ class ChatSession(models.Model):
         ordering = ['-updated_at']
 
     def __str__(self):
-        return f'Chat #{self.pk} — {self.exhibit} ({self.created_at:%Y-%m-%d %H:%M})'
+        label = self.title or f'Chat #{self.pk}'
+        return f'{label} — {self.exhibit} ({self.created_at:%Y-%m-%d %H:%M})'
 
 
 class ChatMessage(models.Model):
