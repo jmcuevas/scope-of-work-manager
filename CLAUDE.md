@@ -17,7 +17,6 @@ Full product specification: `docs/specs.md`. This is the authoritative reference
 | HTMX interaction patterns | `### HTMX Interaction Patterns` |
 | MVP scope boundaries | `### MVP Workflow Summary` |
 | Post-MVP deferred features | `### Post-MVP Architecture Notes` |
-| All pending work (deployment, AI, app features) | `## Pending Implementation` |
 
 ## Commands
 
@@ -99,29 +98,12 @@ The `ScopeItem` model uses `parent` (self-FK), `level`, and `order` fields for h
 ### AI Service Layer
 All AI functions live in `ai_services/services.py`, gated by the `AI_ENABLED` setting. Every workflow must work without AI.
 
-**Service functions:**
-1. `generate_scope_from_description(exhibit)` — project/trade description → structured exhibit sections + items (gap-fill mode when ≥5 items exist)
-2. `generate_scope_item(input_text, exhibit, section)` — natural language → single polished scope item
-3. `rewrite_scope_item(item, exhibit, instruction)` — rewrite a single item with optional instruction
-4. `expand_scope_item(item, exhibit)` — expand one item into sub-items
-5. `section_ai_action(section, exhibit, instruction)` — unified section-level AI: uses tool-based API (add/edit/delete tools) to decide actions from a free-form instruction
-6. `rewrite_section_items(section, exhibit, instruction)` — bulk rewrite all items in a section
-7. `convert_note_to_scope(note, exhibit, instruction)` — convert a note to scope item with overlap detection
-8. `check_exhibit_completeness(exhibit)` — identify gaps in scope coverage
-9. `chat_with_exhibit(exhibit, messages)` — conversational AI with Claude tool use (add/edit/delete/convert_note tools)
+For service function signatures and chat infrastructure details, see `### AI Service Layer` in `docs/specs.md`.
 
-**Architecture pattern — "one AI brain, multiple entry points":**
-- Chat overlay is the full-flexibility interface with all tools available
-- AI icons throughout the UI (sections, items, notes) are pre-scoped shortcuts into the same service layer
-- Each icon opens a popover/inline form with a text input for quick instructions
-- All AI-generated items use `is_pending_review=True` for accept/reject workflow
+**Key patterns:**
+- "One AI brain, multiple entry points": the chat side panel is the full-flexibility interface; AI icons throughout the UI (sections, items, notes) are pre-scoped shortcuts into the same service layer
+- All AI-generated items use `is_pending_review=True` — accept/reject workflow before changes are finalized
 - Token/cost/error metrics logged to `AIRequestLog` (no prompt text stored)
-
-**Chat infrastructure:**
-- Server-side history: `ChatSession` + `ChatMessage` models (persist across page reloads)
-- Structured context: `_build_structured_chat_context()` → JSON with item PKs, refs, hierarchy, notes
-- Claude tool use API: `_call_claude_with_tools()` with `CHAT_TOOLS` (add/edit/delete/convert_note)
-- `_apply_proposed_changes()` in views handles all tool-generated changes uniformly
 
 ## Development Progress
 
@@ -131,16 +113,30 @@ Track completed and pending work in `docs/checklist.md`. Check this at the start
 - `main` — stable, deployable
 - `develop` — active development; merge to `main` at end of each phase
 
-### Development Phases
-1. Foundation + data models ✅
-2. Project dashboard + trade import ✅
-3. Scope exhibit editor ✅
-4. PDF export ✅
-5. Notes & cross-trade tracking ✅
-6. AI scope assistant ✅
-7. Final review + hardening ✅
-8. AI assistant redesign — pending review workflow, per-item rewrite/expand, chat overlay with tool use ✅
-9. AI architecture upgrade — server-side chat history, structured context, section letter numbering, Claude tool use API ✅
-   - Step 5: New AI capabilities — unified section AI action, note-to-scope conversion with overlap detection, chat batch note conversion ✅
+### Versioning
+Follows [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`):
+- **MAJOR** — breaking changes or major rewrites
+- **MINOR** — new features or enhancements
+- **PATCH** — bug fixes
 
-**Remaining:** seed production data, pilot launch onboarding (deployment only)
+Tag `main` after each merge: `git tag -a vX.Y.Z -m "description"`. Push tags with `git push --tags`.
+
+| Tag | Milestone |
+|-----|-----------|
+| `v1.0.0` | MVP complete — all phases 1–9 (pre-deployment) |
+| `v1.0.1` | Railway deployment config + production settings |
+
+### Deployment
+- **Platform:** Railway (Docker-based)
+- **URL:** https://buyouthd.up.railway.app
+- **Auto-deploy:** push to `main` triggers build + migrate + restart
+- **Config files:** `Dockerfile`, `railway.toml`, `.dockerignore`
+- **Env vars:** managed in Railway dashboard (Variables tab)
+
+### Current Version
+- **Deployed:** `v1.0.1` (tagged). App live at https://buyouthd.up.railway.app.
+- **Next:** `v1.1.0` — active development version. When starting new feature work, add a `## v1.1.0 — [Feature Name]` section to `docs/checklist.md` and tag `main` on completion.
+
+Remaining: seed production data, pilot launch onboarding.
+
+See `docs/checklist.md` for full implementation history organized by version.
