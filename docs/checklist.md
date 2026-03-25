@@ -540,8 +540,8 @@ Track progress phase by phase. Check items off as completed.
 
 ---
 
-## v1.1.0 — [Feature Name]
-*Description of this release.*
+## v1.1.0 — Multi-Session Chat + Dashboard Filtering
+*Multi-session AI chat, plus buyout dashboard filtering, grouping, and sorting.*
 
 ### Documentation Maintenance *(2026-03-22)*
 
@@ -581,6 +581,47 @@ Track progress phase by phase. Check items off as completed.
 - [x] Rename updates title; truncates to 200 chars; blocks other users *(2026-03-23)*
 - [x] Delete removes session; loads next session or empty state; blocks other users *(2026-03-23)*
 
+### Streaming AI Chat + Animated Loading
+
+#### Step 1: Deployment
+- [x] Add `uvicorn[standard]` to `requirements.txt` *(2026-03-24)*
+- [x] Update `start.sh`: replace gunicorn WSGI with `exec uvicorn scope_manager.asgi:application --workers 2 --host 0.0.0.0 --port ${PORT:-8000}` *(2026-03-24)*
+
+#### Step 2: Service Layer
+- [x] Add `stream_chat_with_exhibit(exhibit, conversation_history)` generator to `ai_services/services.py` — yields `('text_delta', str)`, `('complete', {full_text, tool_calls})`, `('error', str)`; uses `client.messages.stream()` sync context manager; logs to `AIRequestLog` *(2026-03-24)*
+
+#### Step 3: View Layer
+- [x] Replace `ai_chat_send` with a `StreamingHttpResponse` SSE version — inner generator saves user message, calls `stream_chat_with_exhibit()`, applies tool-call changes after stream ends, saves assistant message, yields SSE `data:` events *(2026-03-24)*
+- [x] Set `Cache-Control: no-cache` and `X-Accel-Buffering: no` response headers *(2026-03-24)*
+
+#### Step 4: Client-Side Chat Panel
+- [x] Replace HTMX form attrs with plain `<form>` + vanilla JS `fetch` + `ReadableStream` in `chat_side_panel.html` (keep context chip JS intact) *(2026-03-24)*
+- [x] Append user bubble to DOM immediately on submit *(2026-03-24)*
+- [x] Show 3-dot bouncing typing indicator while waiting for first token *(2026-03-24)*
+- [x] Stream text into assistant bubble token by token with auto-scroll *(2026-03-24)*
+- [x] On `done` event: swap in linkified `innerHTML`, show "N changes pending" link, dispatch `pendingChanged` to `document.body` *(2026-03-24)*
+- [x] Re-enable form + input after stream completes or errors *(2026-03-24)*
+
+#### Step 5: Animated Loading Indicators
+- [x] Replace static `⏳` `htmx-indicator` text with SVG `animate-spin` spinner in: `editor.html` (Generate Scope + Run Check), `section.html` (Section AI), `item.html` (rewrite/expand), `note_card.html` (note-to-scope), `note_overlap.html` (Edit Existing Item), `ai_panel.html` (rewrite + completeness check), `ai_chat_overlay.html` (send) *(2026-03-24)*
+
+#### Step 6: Tests
+- [x] Add `_collect_sse(response)` helper + `_fake_stream()` / `_fake_stream_error()` helpers — consumes `streaming_content`, returns list of parsed SSE event dicts *(2026-03-24)*
+- [x] Update all `TestAIChatSendView` + `TestApplyChangesDelete` tests: patch `stream_chat_with_exhibit` instead of `chat_with_exhibit`; consume stream inside `with patch` block (lazy generator) *(2026-03-24)*
+- [x] Add `TestStreamChatWithExhibit` (7 tests) to `ai_services/tests.py`: mock anthropic streaming context manager; test text_delta/complete/error events and `AIRequestLog` logging *(2026-03-24)*
+- [x] All 377 tests pass *(2026-03-24)*
+
+#### Thinking Timer
+- [x] Live counter next to typing dots during generation (updates every 1s) *(2026-03-24)*
+- [x] "Thought for Xs" label below response after completion *(2026-03-24)*
+
+#### Specs Update
+- [x] Move streaming from pending features into specs body (AI Service Layer + Chat Side Panel sections) *(2026-03-24)*
+- [x] Add `stream_chat_with_exhibit()`, `generate_chat_title()` to service function list *(2026-03-24)*
+- [x] Update `ChatSession` model (add `title` field) and `ChatMessage` model (add `changes_applied_pks`) *(2026-03-24)*
+
+---
+
 ### File Attachments
 
 - [ ] `Attachment` model with generic FK (`content_type` + `object_id`)
@@ -589,13 +630,15 @@ Track progress phase by phase. Check items off as completed.
 - [ ] Note attachments
 - [ ] Tests
 
-### Buyout Dashboard Filtering & Grouping
+### Buyout Dashboard Filtering & Grouping *(2026-03-24)*
 
-- [ ] Filter bar: filter trades by status, CSI division, and trade name text search
-- [ ] Active filters shown as removable chips; state preserved in URL query params
-- [ ] Grouping toggle: flat list (default), group by CSI Division, group by status
-- [ ] Collapsible group headers with trade count; collapse state persisted in `localStorage`
-- [ ] Sortable column headers (Trade Name, CSI Code, Status, Budget)
-- [ ] Summary bar: aggregate counts per status, updates with active filters
-- [ ] Tests
+- [x] Filter bar: Status multi-select checkbox dropdown (Select All/None, Apply button, close-on-outside-click) *(2026-03-24)*
+- [x] Filter bar: Manager multi-select checkbox dropdown (same format as Status; supports Unassigned + multiple users) *(2026-03-24)*
+- [x] Always-visible "Clear filters" button resets all checkboxes and re-fetches *(2026-03-24)*
+- [x] Filter state preserved in URL query params (`status`, `assigned_to` multi-value); bookmarkable/refreshable *(2026-03-24)*
+- [x] Group by dropdown: flat list (default), group by Status, group by Bid Manager *(2026-03-24)*
+- [x] Collapsible group headers with trade count; collapse state persisted in `localStorage` *(2026-03-24)*
+- [x] Sortable column headers (Trade, Budget, Status, Bid Manager); active column shows ↑/↓ indicator *(2026-03-24)*
+- [x] Stats bar aggregate counts update to reflect active filters *(2026-03-24)*
+- [x] Inline status/assignment changes in grouped mode re-group rows immediately via full tbody swap *(2026-03-24)*
 

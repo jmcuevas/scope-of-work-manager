@@ -874,6 +874,82 @@ def _linkify_item_refs(message, ref_to_pk):
     return escaped
 
 
+def stream_chat_with_exhibit(exhibit, conversation_history):
+    """
+    Streaming version of chat_with_exhibit.
+
+    Yields tuples:
+        ('text_delta', str)                         — one text token from Claude
+        ('complete', {'full_text': str,
+                      'tool_calls': list})          — after stream ends; text is linkified HTML
+        ('error', str)                              — on any failure
+
+    Does NOT write to the DB or apply changes — the caller handles that.
+    """
+    if not settings.AI_ENABLED:
+        yield ('error', 'AI is disabled.')
+        return
+
+    context = _build_structured_chat_context(exhibit)
+    system_prompt = CHAT_SYSTEM_PROMPT + f"\n\nCURRENT EXHIBIT CONTEXT (JSON):\n{json.dumps(context)}\n"
+    api_messages = [{'role': msg['role'], 'content': msg['content']} for msg in conversation_history]
+
+    client = _get_client()
+    start = time.monotonic()
+
+    try:
+        with client.messages.stream(
+            model='claude-sonnet-4-6',
+            max_tokens=4096,
+            system=system_prompt,
+            messages=api_messages,
+            tools=CHAT_TOOLS,
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                yield ('text_delta', text_chunk)
+            final_message = stream.get_final_message()
+
+        latency_ms = int((time.monotonic() - start) * 1000)
+        AIRequestLog.objects.create(
+            request_type=AIRequestLog.RequestType.CHAT,
+            exhibit=exhibit,
+            success=True,
+            tokens_used=final_message.usage.input_tokens + final_message.usage.output_tokens,
+            latency_ms=latency_ms,
+        )
+
+        full_text_parts = []
+        raw_tool_calls = []
+        for block in final_message.content:
+            if block.type == 'text':
+                full_text_parts.append(block.text)
+            elif block.type == 'tool_use':
+                raw_tool_calls.append({'name': block.name, 'input': block.input})
+
+        full_text = '\n\n'.join(full_text_parts).strip()
+
+        # Linkify item references (same logic as chat_with_exhibit)
+        ref_to_pk = {}
+        for section in context.get('sections', []):
+            for item in section.get('items', []):
+                if item.get('ref'):
+                    ref_to_pk[item['ref']] = item['pk']
+        linkified = _linkify_item_refs(full_text, ref_to_pk)
+
+        yield ('complete', {'full_text': linkified, 'tool_calls': raw_tool_calls})
+
+    except Exception as e:
+        latency_ms = int((time.monotonic() - start) * 1000)
+        AIRequestLog.objects.create(
+            request_type=AIRequestLog.RequestType.CHAT,
+            exhibit=exhibit,
+            success=False,
+            error_message=str(e),
+            latency_ms=latency_ms,
+        )
+        yield ('error', str(e))
+
+
 def chat_with_exhibit(exhibit, conversation_history):
     """
     Multi-turn conversational AI for exhibit-level assistance.

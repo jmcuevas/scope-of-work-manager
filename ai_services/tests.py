@@ -29,6 +29,7 @@ from .services import (
     generate_scope_from_description,
     generate_scope_item,
     rewrite_scope_item,
+    stream_chat_with_exhibit,
 )
 
 
@@ -1665,3 +1666,125 @@ class TestToolCallsConvertNote:
         assert result[0]['action'] == 'convert_note'
         assert result[0]['note_pk'] == 42
         assert result[0]['section_name'] == 'Scope of Work'
+
+
+# ---------------------------------------------------------------------------
+# stream_chat_with_exhibit
+# ---------------------------------------------------------------------------
+
+def _make_mock_stream(text_chunks, tool_calls=None):
+    """Build a mock context manager that mimics client.messages.stream()."""
+    final_content = []
+    full_text = ''.join(text_chunks)
+    if full_text:
+        final_content.append(MagicMock(type='text', text=full_text))
+    for tc in (tool_calls or []):
+        block = MagicMock(type='tool_use')
+        block.name = tc['name']
+        block.input = tc['input']
+        final_content.append(block)
+
+    final_msg = MagicMock()
+    final_msg.content = final_content
+    final_msg.usage.input_tokens = 100
+    final_msg.usage.output_tokens = 50
+
+    stream = MagicMock()
+    stream.text_stream = iter(text_chunks)
+    stream.get_final_message.return_value = final_msg
+
+    manager = MagicMock()
+    manager.__enter__ = MagicMock(return_value=stream)
+    manager.__exit__ = MagicMock(return_value=False)
+    return manager
+
+
+@pytest.mark.django_db
+class TestStreamChatWithExhibit:
+
+    def test_yields_text_deltas(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        history = [{'role': 'user', 'content': 'Hello'}]
+        mock_stream = _make_mock_stream(['Hello ', 'world!'])
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.stream.return_value = mock_stream
+            events = list(stream_chat_with_exhibit(exhibit, history))
+        text_deltas = [(t, d) for t, d in events if t == 'text_delta']
+        assert len(text_deltas) == 2
+        assert text_deltas[0][1] == 'Hello '
+        assert text_deltas[1][1] == 'world!'
+
+    def test_yields_complete_with_full_text(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        history = [{'role': 'user', 'content': 'Hello'}]
+        mock_stream = _make_mock_stream(['The scope looks good.'])
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.stream.return_value = mock_stream
+            events = list(stream_chat_with_exhibit(exhibit, history))
+        complete = [d for t, d in events if t == 'complete']
+        assert len(complete) == 1
+        assert 'The scope looks good.' in complete[0]['full_text']
+        assert complete[0]['tool_calls'] == []
+
+    def test_yields_complete_with_tool_calls(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
+        history = [{'role': 'user', 'content': 'Add an item.'}]
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work', 'text': 'Provide ductwork.', 'level': 0,
+        }}]
+        mock_stream = _make_mock_stream(['Done.'], tool_calls)
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.stream.return_value = mock_stream
+            events = list(stream_chat_with_exhibit(exhibit, history))
+        complete = [d for t, d in events if t == 'complete']
+        assert len(complete[0]['tool_calls']) == 1
+        assert complete[0]['tool_calls'][0]['name'] == 'add_scope_item'
+
+    def test_yields_error_on_exception(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.stream.side_effect = Exception('API timeout')
+            events = list(stream_chat_with_exhibit(exhibit, history))
+        errors = [(t, d) for t, d in events if t == 'error']
+        assert len(errors) == 1
+        assert 'API timeout' in errors[0][1]
+
+    def test_logs_successful_request(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        history = [{'role': 'user', 'content': 'Hello'}]
+        mock_stream = _make_mock_stream(['OK.'])
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.stream.return_value = mock_stream
+            list(stream_chat_with_exhibit(exhibit, history))
+        log = AIRequestLog.objects.latest('created_at')
+        assert log.request_type == AIRequestLog.RequestType.CHAT
+        assert log.success is True
+        assert log.tokens_used == 150  # 100 + 50
+
+    def test_logs_failed_request(self):
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        history = [{'role': 'user', 'content': 'Hello'}]
+        with patch('ai_services.services._get_client') as mock_client:
+            mock_client.return_value.messages.stream.side_effect = Exception('timeout')
+            list(stream_chat_with_exhibit(exhibit, history))
+        log = AIRequestLog.objects.latest('created_at')
+        assert log.request_type == AIRequestLog.RequestType.CHAT
+        assert log.success is False
+        assert 'timeout' in log.error_message
+
+    def test_yields_error_when_ai_disabled(self, settings):
+        settings.AI_ENABLED = False
+        user = PMUserFactory()
+        exhibit = _make_exhibit(user)
+        events = list(stream_chat_with_exhibit(exhibit, [{'role': 'user', 'content': 'Hi'}]))
+        assert len(events) == 1
+        assert events[0][0] == 'error'
+        assert 'disabled' in events[0][1].lower()

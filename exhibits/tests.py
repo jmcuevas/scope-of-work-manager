@@ -1,3 +1,4 @@
+import json
 import pytest
 from unittest.mock import patch
 from django.urls import reverse
@@ -1355,6 +1356,42 @@ class TestAIChatView:
 # AI chat send view
 # ---------------------------------------------------------------------------
 
+def _collect_sse(response):
+    """Consume a StreamingHttpResponse and parse SSE events into a list of dicts."""
+    raw = b''.join(response.streaming_content).decode()
+    events = []
+    for line in raw.split('\n'):
+        if line.startswith('data: '):
+            try:
+                events.append(json.loads(line[6:]))
+            except json.JSONDecodeError:
+                pass
+    return events
+
+
+def _fake_stream(text='', tool_calls=None):
+    """Build a generator that mimics stream_chat_with_exhibit output."""
+    def _gen(*args, **kwargs):
+        # Yield text in a couple of chunks (like real streaming)
+        if text:
+            words = text.split(' ')
+            mid = max(1, len(words) // 2)
+            yield ('text_delta', ' '.join(words[:mid]) + ' ')
+            yield ('text_delta', ' '.join(words[mid:]))
+        yield ('complete', {
+            'full_text': text,
+            'tool_calls': tool_calls or [],
+        })
+    return _gen
+
+
+def _fake_stream_error(error_msg):
+    """Build a generator that mimics a stream_chat_with_exhibit error."""
+    def _gen(*args, **kwargs):
+        yield ('error', error_msg)
+    return _gen
+
+
 @pytest.mark.django_db
 class TestAIChatSendView:
 
@@ -1365,87 +1402,84 @@ class TestAIChatSendView:
         section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
         return user, exhibit, section
 
-    def test_returns_user_and_assistant_messages(self, client):
+    def test_returns_sse_with_text_and_done(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'Got it!', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Got it!')):
             response = client.post(url, {'message': 'Hello'})
-        assert response.status_code == 200
-        assert b'Hello' in response.content
-        assert b'Got it!' in response.content
+            assert response.status_code == 200
+            events = _collect_sse(response)
+        done = [e for e in events if e['type'] == 'done'][0]
+        assert done['full_text'] == 'Got it!'
+        assert done['changes_applied_pks'] == []
 
     def test_add_change_creates_pending_item(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {
-            'message': 'Done!',
-            'proposed_changes': [
-                {'action': 'add', 'section_name': 'Scope of Work', 'text': 'Provide fire stopping.', 'level': 0}
-            ],
-        }
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work', 'text': 'Provide fire stopping.', 'level': 0,
+        }}]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Done!', tool_calls)):
             response = client.post(url, {'message': 'Add fire stopping'})
-        assert response.status_code == 200
+            _collect_sse(response)  # must consume before DB assertions
         item = ScopeItem.objects.get(section=section, text='Provide fire stopping.')
         assert item.is_pending_review is True
         assert item.is_ai_generated is True
 
-    def test_add_change_fires_pending_changed_trigger(self, client):
+    def test_add_change_returns_pks_in_done_event(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {
-            'message': 'Done!',
-            'proposed_changes': [
-                {'action': 'add', 'section_name': 'Scope of Work', 'text': 'Provide X.', 'level': 0}
-            ],
-        }
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work', 'text': 'Provide X.', 'level': 0,
+        }}]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Done!', tool_calls)):
             response = client.post(url, {'message': 'Add X'})
-        assert response['HX-Trigger'] == 'pendingChanged'
+            events = _collect_sse(response)
+        done = [e for e in events if e['type'] == 'done'][0]
+        assert len(done['changes_applied_pks']) == 1
 
     def test_edit_change_sets_pending_fields(self, client):
         user, exhibit, section = self._setup(client)
         item = ScopeItemFactory(section=section, text='Original text', created_by=user)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {
-            'message': 'Updated!',
-            'proposed_changes': [
-                {'action': 'edit', 'target_item_pk': item.pk, 'text': 'Revised text.', 'level': 0}
-            ],
-        }
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        tool_calls = [{'name': 'edit_scope_item', 'input': {
+            'target_item_pk': item.pk, 'text': 'Revised text.', 'level': 0,
+        }}]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Updated!', tool_calls)):
             response = client.post(url, {'message': 'Edit item'})
-        assert response.status_code == 200
+            _collect_sse(response)
         item.refresh_from_db()
         assert item.text == 'Revised text.'
         assert item.pending_original_text == 'Original text'
         assert item.is_pending_review is True
 
-    def test_no_changes_does_not_fire_trigger(self, client):
+    def test_no_changes_returns_empty_pks(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'No changes needed.', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('No changes needed.')):
             response = client.post(url, {'message': 'How does this look?'})
-        assert response.status_code == 200
-        assert 'HX-Trigger' not in response
+            events = _collect_sse(response)
+        done = [e for e in events if e['type'] == 'done'][0]
+        assert done['changes_applied_pks'] == []
 
-    def test_ai_failure_returns_error_message(self, client):
-        from ai_services.services import AIServiceError
+    def test_ai_failure_returns_error_event(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        with patch('exhibits.views.chat_with_exhibit', side_effect=AIServiceError('timeout')):
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream_error('timeout')):
             response = client.post(url, {'message': 'Hello'})
-        assert response.status_code == 200
-        assert b'timeout' in response.content
+            events = _collect_sse(response)
+        error_events = [e for e in events if e['type'] == 'error']
+        assert len(error_events) == 1
+        assert 'timeout' in error_events[0]['message']
 
-    def test_empty_message_returns_empty_response(self, client):
+    def test_empty_message_returns_done_with_empty_text(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
         response = client.post(url, {'message': ''})
         assert response.status_code == 200
-        assert response.content == b''
+        events = _collect_sse(response)
+        done = [e for e in events if e['type'] == 'done'][0]
+        assert done['full_text'] == ''
 
     def test_history_is_passed_to_service(self, client):
         """Prior DB messages are included in conversation sent to AI."""
@@ -1455,10 +1489,10 @@ class TestAIChatSendView:
         ChatMessage.objects.create(session=session, role='user', content='Earlier message')
         ChatMessage.objects.create(session=session, role='assistant', content='Earlier reply')
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'Response.', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'New message', 'session_pk': session.pk})
-        call_args = mock_chat.call_args[0]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Response.')) as mock_stream:
+            response = client.post(url, {'message': 'New message', 'session_pk': session.pk})
+            _collect_sse(response)
+        call_args = mock_stream.call_args[0]
         conversation = call_args[1]
         assert conversation[0]['content'] == 'Earlier message'
         assert conversation[1]['content'] == 'Earlier reply'
@@ -1469,9 +1503,9 @@ class TestAIChatSendView:
         from ai_services.models import ChatMessage, ChatSession
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'AI response here.', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            client.post(url, {'message': 'User says hello'})
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('AI response here.')):
+            response = client.post(url, {'message': 'User says hello'})
+            _collect_sse(response)  # consume streaming content to trigger DB writes
         session = ChatSession.objects.get(exhibit=exhibit)
         messages = list(session.messages.order_by('created_at'))
         assert len(messages) == 2
@@ -1487,15 +1521,15 @@ class TestAIChatSendView:
         from ai_services.models import ChatMessage, ChatSession
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result1 = {'message': 'Reply 1', 'proposed_changes': []}
         # First send creates a new session (no session_pk)
-        with patch('exhibits.views.chat_with_exhibit', return_value=result1):
-            client.post(url, {'message': 'Message 1'})
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Reply 1')):
+            resp1 = client.post(url, {'message': 'Message 1'})
+            _collect_sse(resp1)
         session = ChatSession.objects.filter(exhibit=exhibit, user=user).first()
-        result2 = {'message': 'Reply 2', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result2) as mock_chat:
-            client.post(url, {'message': 'Message 2', 'session_pk': session.pk})
-        conversation = mock_chat.call_args[0][1]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Reply 2')) as mock_stream:
+            resp2 = client.post(url, {'message': 'Message 2', 'session_pk': session.pk})
+            _collect_sse(resp2)
+        conversation = mock_stream.call_args[0][1]
         assert len(conversation) == 3
         assert conversation[0] == {'role': 'user', 'content': 'Message 1'}
         assert conversation[1] == {'role': 'assistant', 'content': 'Reply 1'}
@@ -1521,13 +1555,13 @@ class TestAIChatSendView:
     def test_context_section_injected(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'Got it!', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Got it!')) as mock_stream:
+            response = client.post(url, {
                 'message': 'Add seismic bracing.',
                 'context_section_pks': [section.pk],
             })
-        conversation = mock_chat.call_args[0][1]
+            _collect_sse(response)
+        conversation = mock_stream.call_args[0][1]
         assert f'Section "{section.name}"' in conversation[0]['content']
         assert 'Add seismic bracing.' in conversation[0]['content']
 
@@ -1543,22 +1577,22 @@ class TestAIChatSendView:
             created_by=user,
         )
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'Done!', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Done!')) as mock_stream:
+            response = client.post(url, {
                 'message': 'Convert this note.',
                 'context_note_pks': [note.pk],
             })
-        conversation = mock_chat.call_args[0][1]
+            _collect_sse(response)
+        conversation = mock_stream.call_args[0][1]
         assert 'Fire stopping at penetrations required.' in conversation[0]['content']
 
     def test_no_context_no_prefix(self, client):
         user, exhibit, section = self._setup(client)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {'message': 'OK', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result) as mock_chat:
-            client.post(url, {'message': 'Hello'})
-        conversation = mock_chat.call_args[0][1]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('OK')) as mock_stream:
+            response = client.post(url, {'message': 'Hello'})
+            _collect_sse(response)
+        conversation = mock_stream.call_args[0][1]
         assert conversation[0]['content'] == 'Hello'
 
     def test_session_scoped_to_user(self, client):
@@ -1567,15 +1601,16 @@ class TestAIChatSendView:
         user_a = PMUserFactory()
         user_b = PMUserFactory(company=user_a.company)
         _, exhibit = _make_trade_with_exhibit(user_a)
-        result = {'message': 'Hi', 'proposed_changes': []}
         # User A sends a message
         _login(client, user_a)
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            client.post(reverse('exhibits:ai_chat_send', args=[exhibit.pk]), {'message': 'From A'})
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Hi')):
+            resp = client.post(reverse('exhibits:ai_chat_send', args=[exhibit.pk]), {'message': 'From A'})
+            _collect_sse(resp)
         # User B sends a message
         _login(client, user_b)
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            client.post(reverse('exhibits:ai_chat_send', args=[exhibit.pk]), {'message': 'From B'})
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Hi')):
+            resp = client.post(reverse('exhibits:ai_chat_send', args=[exhibit.pk]), {'message': 'From B'})
+            _collect_sse(resp)
         assert ChatSession.objects.filter(exhibit=exhibit, user=user_a).count() == 1
         assert ChatSession.objects.filter(exhibit=exhibit, user=user_b).count() == 1
         assert ChatSession.objects.filter(exhibit=exhibit).count() == 2
@@ -1584,13 +1619,13 @@ class TestAIChatSendView:
         """Session.title is set via generate_chat_title on the first send."""
         from ai_services.models import ChatSession
         user, exhibit, section = self._setup(client)
-        result = {'message': 'OK', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result), \
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('OK')), \
              patch('exhibits.views.generate_chat_title', return_value='Seismic Bracing MEP Supports') as mock_title:
-            client.post(
+            resp = client.post(
                 reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
                 {'message': 'Add seismic bracing to all MEP supports on this project'},
             )
+            _collect_sse(resp)
         session = ChatSession.objects.get(exhibit=exhibit, user=user)
         assert session.title == 'Seismic Bracing MEP Supports'
         mock_title.assert_called_once_with('Add seismic bracing to all MEP supports on this project')
@@ -1599,22 +1634,23 @@ class TestAIChatSendView:
         """Sending a second message does not call generate_chat_title again."""
         from ai_services.models import ChatSession
         user, exhibit, section = self._setup(client)
-        result = {'message': 'OK', 'proposed_changes': []}
         # First send creates session and sets title
-        with patch('exhibits.views.chat_with_exhibit', return_value=result), \
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('OK')), \
              patch('exhibits.views.generate_chat_title', return_value='First Chat Title'):
-            client.post(
+            resp = client.post(
                 reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
                 {'message': 'First message'},
             )
+            _collect_sse(resp)
         session = ChatSession.objects.get(exhibit=exhibit, user=user)
         # Second send should NOT call generate_chat_title again
-        with patch('exhibits.views.chat_with_exhibit', return_value=result), \
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('OK')), \
              patch('exhibits.views.generate_chat_title', return_value='New Title') as mock_title:
-            client.post(
+            resp = client.post(
                 reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
                 {'message': 'Second message', 'session_pk': session.pk},
             )
+            _collect_sse(resp)
         mock_title.assert_not_called()
         session.refresh_from_db()
         assert session.title == 'First Chat Title'
@@ -1625,14 +1661,36 @@ class TestAIChatSendView:
         user, exhibit, section = self._setup(client)
         s1 = ChatSession.objects.create(exhibit=exhibit, user=user)
         s2 = ChatSession.objects.create(exhibit=exhibit, user=user)
-        result = {'message': 'Replied', 'proposed_changes': []}
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
-            client.post(
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Replied')):
+            resp = client.post(
                 reverse('exhibits:ai_chat_send', args=[exhibit.pk]),
                 {'message': 'For session 2', 'session_pk': s2.pk},
             )
+            _collect_sse(resp)
         assert ChatMessage.objects.filter(session=s2).exists()
         assert not ChatMessage.objects.filter(session=s1).exists()
+
+    def test_new_session_pk_in_done_event(self, client):
+        """When no session_pk is provided, done event includes new_session_pk."""
+        user, exhibit, section = self._setup(client)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Hi')):
+            response = client.post(url, {'message': 'Hello'})
+            events = _collect_sse(response)
+        done = [e for e in events if e['type'] == 'done'][0]
+        assert done['new_session_pk'] is not None
+
+    def test_existing_session_no_new_pk(self, client):
+        """When session_pk is provided, done event has new_session_pk=None."""
+        from ai_services.models import ChatSession
+        user, exhibit, section = self._setup(client)
+        session = ChatSession.objects.create(exhibit=exhibit, user=user)
+        url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('Hi')):
+            response = client.post(url, {'message': 'Hello', 'session_pk': session.pk})
+            events = _collect_sse(response)
+        done = [e for e in events if e['type'] == 'done'][0]
+        assert done['new_session_pk'] is None
 
 
 # ---------------------------------------------------------------------------
@@ -2173,15 +2231,10 @@ class TestApplyChangesDelete:
         section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
         item = ScopeItemFactory(section=section, text='Existing item', created_by=user)
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {
-            'message': '',
-            'proposed_changes': [
-                {'action': 'delete', 'target_item_pk': item.pk}
-            ],
-        }
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        tool_calls = [{'name': 'delete_scope_item', 'input': {'target_item_pk': item.pk}}]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('', tool_calls)):
             response = client.post(url, {'message': 'Delete that item'})
-        assert response.status_code == 200
+            _collect_sse(response)
         item.refresh_from_db()
         assert item.is_pending_review is True
         assert item.pending_delete is True
@@ -2194,15 +2247,12 @@ class TestApplyChangesDelete:
         _, exhibit = _make_trade_with_exhibit(user)
         section = ExhibitSectionFactory(scope_exhibit=exhibit, name='Scope of Work')
         url = reverse('exhibits:ai_chat_send', args=[exhibit.pk])
-        result = {
-            'message': '',
-            'proposed_changes': [
-                {'action': 'add', 'section_name': 'Scope of Work', 'text': 'New item.', 'level': 0}
-            ],
-        }
-        with patch('exhibits.views.chat_with_exhibit', return_value=result):
+        tool_calls = [{'name': 'add_scope_item', 'input': {
+            'section_name': 'Scope of Work', 'text': 'New item.', 'level': 0,
+        }}]
+        with patch('exhibits.views.stream_chat_with_exhibit', side_effect=_fake_stream('', tool_calls)):
             response = client.post(url, {'message': 'Add an item'})
-        assert response.status_code == 200
+            _collect_sse(response)
         session = ChatSession.objects.get(exhibit=exhibit)
         assistant_msg = session.messages.filter(role='assistant').first()
         assert 'Done' in assistant_msg.content

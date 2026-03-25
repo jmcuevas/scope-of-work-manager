@@ -51,12 +51,7 @@
 
 <!-- Input area -->
 <div class="shrink-0 border-t border-gray-200 px-4 py-3">
-  <form id="chat-form"
-        hx-post="{% url 'exhibits:ai_chat_send' exhibit.pk %}"
-        hx-target="#chat-messages"
-        hx-swap="beforeend"
-        hx-indicator="#chat-send-spinner"
-        hx-disabled-elt="find button[type='submit'], find textarea">
+  <form id="chat-form">
     {% csrf_token %}
     <input type="hidden" id="session-pk-input" name="session_pk" value="{{ session.pk|default:'' }}">
 
@@ -142,9 +137,14 @@
 
       <div class="flex-1"></div>
 
-      <button type="submit"
+      <button id="chat-send-btn" type="submit"
               class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white rounded-lg transition-colors shrink-0">
-        <span id="chat-send-spinner" class="htmx-indicator">⏳</span>
+        <span id="chat-send-spinner" class="hidden">
+          <svg class="animate-spin w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </span>
         Send ✨
       </button>
     </div>
@@ -154,21 +154,166 @@
 
 <script>
   var selectedContext = [];
+  var _chatStreaming = false;
+  var CHAT_SEND_URL = "{% url 'exhibits:ai_chat_send' exhibit.pk %}";
+  var CHAT_SESSION_TITLE_URL_TEMPLATE = "{% url 'exhibits:ai_chat_session_title' exhibit.pk 99999999 %}";
 
-  // Scroll to bottom on load if there are existing messages
+  // Scroll to bottom on load
   (function() {
     var chatBox = document.getElementById('chat-messages');
     if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
   })();
 
-  document.getElementById('chat-messages').addEventListener('htmx:afterSwap', function(evt) {
-    evt.detail.target.scrollTop = evt.detail.target.scrollHeight;
+  // Streaming form submit
+  document.getElementById('chat-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    if (_chatStreaming) return;
+
     var input = document.getElementById('chat-message-input');
-    if (input) input.value = '';
-    // Clear context chips after send
+    var message = input.value.trim();
+    if (!message) return;
+
+    var formData = new FormData(this);
+    var csrfToken = formData.get('csrfmiddlewaretoken');
+    var chatBox = document.getElementById('chat-messages');
+
+    // Append user bubble immediately
+    var userBubble = document.createElement('div');
+    userBubble.className = 'flex justify-end';
+    userBubble.innerHTML = '<div class="max-w-[80%] bg-primary-600 text-white rounded-2xl rounded-br-sm px-4 py-3">'
+      + '<p class="text-sm leading-relaxed whitespace-pre-wrap">' + _escapeHtml(message) + '</p></div>';
+    chatBox.appendChild(userBubble);
+
+    // Append assistant bubble with typing dots
+    var asstOuter = document.createElement('div');
+    asstOuter.id = 'chat-streaming-bubble';
+    asstOuter.className = 'flex justify-start';
+    asstOuter.innerHTML =
+      '<div class="max-w-[80%] bg-gray-100 text-gray-800 rounded-2xl rounded-bl-sm px-4 py-3">'
+      + '<span id="chat-typing-dots" class="flex gap-1 items-center py-1">'
+      + '<span class="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style="animation-delay:0ms"></span>'
+      + '<span class="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style="animation-delay:150ms"></span>'
+      + '<span class="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style="animation-delay:300ms"></span>'
+      + '<span id="chat-thinking-timer" class="text-xs text-gray-400 ml-2">0s</span>'
+      + '</span>'
+      + '<span id="chat-stream-text" class="text-sm leading-relaxed whitespace-pre-wrap hidden"></span>'
+      + '<span id="chat-thinking-time" class="hidden block text-xs text-gray-400 mt-1.5"></span>'
+      + '<span id="chat-changes-link" class="hidden"></span>'
+      + '</div>';
+    chatBox.appendChild(asstOuter);
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    // Lock form
+    _chatStreaming = true;
+    input.value = '';
     selectedContext = [];
     renderContextChips();
+    var sendBtn = document.getElementById('chat-send-btn');
+    sendBtn.disabled = true;
+    document.getElementById('chat-send-spinner').classList.remove('hidden');
+    input.disabled = true;
+
+    var streamText = document.getElementById('chat-stream-text');
+    var typingDots = document.getElementById('chat-typing-dots');
+    var thinkingTimer = document.getElementById('chat-thinking-timer');
+    var accumulatedText = '';
+    var _streamStartTime = Date.now();
+    var _timerInterval = setInterval(function() {
+      var elapsed = Math.round((Date.now() - _streamStartTime) / 1000);
+      if (thinkingTimer) thinkingTimer.textContent = elapsed + 's';
+    }, 1000);
+
+    fetch(CHAT_SEND_URL, {
+      method: 'POST',
+      headers: {'X-CSRFToken': csrfToken},
+      body: formData,
+    })
+    .then(function(resp) {
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+
+      function readChunk() {
+        return reader.read().then(function(r) {
+          if (r.done) { _finishStream(); return; }
+          buffer += decoder.decode(r.value, {stream: true});
+          var lines = buffer.split('\n');
+          buffer = lines.pop();
+          lines.forEach(function(line) {
+            if (!line.startsWith('data: ')) return;
+            try {
+              var evt = JSON.parse(line.slice(6));
+              if (evt.type === 'text_delta') {
+                typingDots.classList.add('hidden');
+                streamText.classList.remove('hidden');
+                accumulatedText += evt.content;
+                streamText.textContent = accumulatedText;
+                chatBox.scrollTop = chatBox.scrollHeight;
+              } else if (evt.type === 'error') {
+                typingDots.classList.add('hidden');
+                streamText.classList.remove('hidden');
+                streamText.textContent = evt.message;
+              } else if (evt.type === 'done') {
+                // Replace plain text with linkified HTML from server
+                if (evt.full_text) {
+                  streamText.innerHTML = evt.full_text;
+                  streamText.classList.remove('hidden');
+                }
+                typingDots.classList.add('hidden');
+                if (evt.changes_applied_pks && evt.changes_applied_pks.length) {
+                  var n = evt.changes_applied_pks.length;
+                  var pks = JSON.stringify(evt.changes_applied_pks);
+                  var changesEl = document.getElementById('chat-changes-link');
+                  changesEl.innerHTML = '<a href="#" onclick="highlightItems(' + pks + '); return false;"'
+                    + ' class="block text-xs text-primary-600 font-medium mt-2 hover:underline cursor-pointer">'
+                    + '&#10003; ' + n + ' change' + (n !== 1 ? 's' : '') + ' added as pending items \u2014 review in the editor.</a>';
+                  changesEl.classList.remove('hidden');
+                  document.body.dispatchEvent(new Event('pendingChanged'));
+                }
+                // Update session PK + title area when a new session was created
+                if (evt.new_session_pk) {
+                  document.getElementById('session-pk-input').value = evt.new_session_pk;
+                  var titleUrl = CHAT_SESSION_TITLE_URL_TEMPLATE.replace('99999999', evt.new_session_pk);
+                  htmx.ajax('GET', titleUrl, {target: '#chat-session-title-area', swap: 'outerHTML'});
+                }
+              }
+            } catch(err) {}
+          });
+          return readChunk();
+        });
+      }
+      return readChunk();
+    })
+    .catch(function() {
+      typingDots.classList.add('hidden');
+      streamText.classList.remove('hidden');
+      streamText.textContent = 'Network error. Please try again.';
+      _finishStream();
+    });
+
+    function _finishStream() {
+      clearInterval(_timerInterval);
+      var elapsed = ((Date.now() - _streamStartTime) / 1000).toFixed(1);
+      var thinkingTimeEl = document.getElementById('chat-thinking-time');
+      if (thinkingTimeEl) {
+        thinkingTimeEl.textContent = 'Thought for ' + elapsed + 's';
+        thinkingTimeEl.classList.remove('hidden');
+      }
+      _chatStreaming = false;
+      sendBtn.disabled = false;
+      document.getElementById('chat-send-spinner').classList.add('hidden');
+      input.disabled = false;
+      input.focus();
+      var bubble = document.getElementById('chat-streaming-bubble');
+      if (bubble) bubble.removeAttribute('id');
+    }
   });
+
+  function _escapeHtml(text) {
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(text));
+    return d.innerHTML;
+  }
 
   function toggleContextPicker(event) {
     event.stopPropagation();

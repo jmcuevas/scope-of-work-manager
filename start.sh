@@ -1,4 +1,4 @@
 #!/bin/bash
 set -e
 python manage.py migrate --noinput
-exec gunicorn scope_manager.wsgi --workers 2 --bind "0.0.0.0:${PORT:-8000}"
+exec uvicorn scope_manager.asgi:application --workers 2 --host 0.0.0.0 --port "${PORT:-8000}"

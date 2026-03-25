@@ -113,6 +113,7 @@ Template Selection → Scope Customization → Notes Integration → Bid Issuanc
 - *As a PM, I want to create a project and import my trade list so I can see all trades I need to buy out in one place.*
 - *As a PM, I want to tag my project type so the system recommends the most relevant templates for each trade.*
 - *As a PM, I want to see a dashboard of all trades and their buyout status so I know what's done and what's outstanding.*
+- *As a PM, I want to filter trades by status and manager, group them by status or manager, and sort any column so I can focus on the slice of work that needs my attention.*
 
 ---
 
@@ -620,7 +621,7 @@ The data model supports these critical views:
 
 | View | Query Pattern |
 |------|--------------|
-| Buyout dashboard | All Trades for a Project, grouped by status |
+| Buyout dashboard | All Trades for a Project; supports multi-value status + manager filters, group-by (status or manager), and sort on any column — all via URL query params, server-rendered with HTMX partial swaps |
 | Template / starting point selection | ScopeExhibits where (`is_template=true` OR (`is_template=false` AND `status=FINALIZED`)) AND `csi_trade` matches. Sorted: company master templates first, then past exhibits with exact project type match, then remaining past exhibits by date (most recent first). |
 | Scope editor | ScopeExhibit → ExhibitSections (ordered) → ScopeItems per section (ordered, hierarchical) |
 | Notes sidebar | Notes where primary_trade = this trade OR this trade in related_trades |
@@ -664,13 +665,21 @@ def check_exhibit_completeness(exhibit) -> dict
 
 # Conversational chat: multi-turn conversation with tool use
 def chat_with_exhibit(exhibit, messages) -> dict
+
+# Streaming chat: yields SSE events for token-by-token rendering
+def stream_chat_with_exhibit(exhibit, conversation_history) -> Generator
+# yields: ('text_delta', str), ('complete', {full_text, tool_calls}), ('error', str)
+
+# Auto-title: generates a short session title from the first user message
+def generate_chat_title(user_message) -> str
 ```
 
 #### Chat Infrastructure
 
-- **Server-side history**: `ChatSession` + `ChatMessage` models persist conversations across page reloads. One session per exhibit, created on first chat open.
+- **Server-side history**: `ChatSession` + `ChatMessage` models persist conversations across page reloads. Multiple sessions per user per exhibit; lazy creation (session saved on first message send). Auto-titled via `generate_chat_title()` using Claude Haiku.
+- **Streaming**: `stream_chat_with_exhibit()` uses the Anthropic SDK's `client.messages.stream()` sync context manager to yield text tokens as they arrive. The view returns a `StreamingHttpResponse` with `content_type='text/event-stream'` (SSE). Text streams token-by-token; tool-call changes are applied after the stream completes.
 - **Structured context**: `_build_structured_chat_context()` builds a JSON snapshot of the exhibit state — items with PKs, refs (A.1, A.1.1), hierarchy, pending status, and open notes. Injected into every chat API call.
-- **Claude tool use API**: Chat uses `_call_claude_with_tools()` with four tools:
+- **Claude tool use API**: Chat uses `client.messages.stream()` with four tools:
   - `add_scope_item` — add new item to a section (by name)
   - `edit_scope_item` — edit existing item (by PK)
   - `delete_scope_item` — delete existing item (by PK)
@@ -693,6 +702,7 @@ AIRequestLog
 ChatSession
 ├── exhibit (FK → ScopeExhibit, nullable)
 ├── user (FK → User)
+├── title: varchar(200), nullable — auto-generated from first message via Claude Haiku
 ├── context_type: default 'exhibit'
 ├── created_at
 └── updated_at
@@ -702,6 +712,7 @@ ChatMessage
 ├── role: 'user' | 'assistant'
 ├── content: text
 ├── user (FK → User, nullable — null for assistant)
+├── changes_applied_pks: JSONField (default=[]) — PKs of scope items created/edited by this message
 ├── tokens_used: int (nullable)
 └── created_at
 ```
@@ -761,14 +772,15 @@ The AI is surfaced through multiple entry points in the scope editor, all using 
 
 #### 5. Chat Side Panel (conversation + all tools)
 - "Chat with AI ✨" button in the editor header expands the right panel to 45vw
-- Layout (top to bottom): header, collapsible Quick Actions (completeness check), chat messages area, input area
-- **Chat messages**: scrollable history with user/assistant bubbles. Conversations persist server-side (`ChatSession` + `ChatMessage` models) — resumable across page reloads
-- **Input area**: textarea with context chip picker (`+` button to attach sections/notes as context), Send button
-- **Tool use**: AI can add/edit/delete items and convert notes to scope via Claude tool use API. All changes applied as pending review
+- Layout (top to bottom): header with session dropdown, collapsible Quick Actions (completeness check), chat messages area, input area
+- **Multi-session**: Users can have multiple chat sessions per exhibit. Session dropdown in header allows new chat, switch, rename, and delete. Sessions are lazy-created (saved on first message send) and auto-titled via Claude Haiku.
+- **Streaming responses**: Chat uses SSE (`StreamingHttpResponse` with `text/event-stream`). Text appears token-by-token as Claude generates it. Vanilla JS `fetch()` + `ReadableStream` on the client (HTMX cannot handle SSE streaming). Three SSE event types: `text_delta` (incremental text), `error`, `done` (final linkified text + tool-call results).
+- **Thinking timer**: A live counter next to the typing dots shows elapsed seconds during generation (updates every 1s). On completion, shows "Thought for Xs" below the response.
+- **Chat messages**: scrollable history with user/assistant bubbles. User bubble appended immediately on submit; assistant bubble shows 3-dot bouncing typing indicator until first token arrives, then streams text with auto-scroll.
+- **Input area**: textarea with context chip picker (`+` button to attach sections/notes as context), Send button with animated spinner during generation
+- **Tool use**: AI can add/edit/delete items and convert notes to scope via Claude tool use API. Tool-call changes are applied after the stream completes. All changes applied as pending review. `pendingChanged` event dispatched to `document.body` to refresh section list and pending banner.
 - **Completeness check**: results render as a chat-style bubble with actionable gap cards ("+ Add to {section}" / "✕ Dismiss")
-- HTMX patterns:
-  - Chat send: `hx-post` → server loads history from DB, calls Claude with tools → saves messages to DB → returns assistant message partial → appends to chat area
-  - Section list auto-refreshes when chat panel closes
+- **Loading indicators**: All AI action buttons (Generate Scope, Section AI, item rewrite/expand, note-to-scope, completeness check) use animated SVG spinners instead of static indicators
 
 #### Pending Banner
 - Shown in the editor header when `exhibit.sections.items.filter(is_pending_review=True).exists()`
@@ -834,12 +846,14 @@ The UI is server-rendered HTML with HTMX for dynamic behavior — no JavaScript 
 | AI: note-to-scope conversion | `hx-post` → calls Claude API → overlap check → returns overlap banner (with edit/add/dismiss) or creates pending item + resolves note → returns updated note card |
 | AI: completeness check | `hx-post` → calls Claude API → returns chat-bubble partial appended to `#chat-messages` with gap cards (accept/dismiss per card, client-side) |
 | AI: add gap item | `hx-post` → creates pending `ScopeItem` in target section → returns section item list; fires `HX-Trigger: pendingChanged`; card replaced with "✓ Added" in-place |
-| AI: chat send (side panel) | `hx-post` → server loads history from DB, calls Claude with tools → saves messages to DB → applies proposed changes as pending → returns chat response appended to `#chat-messages` + pending banner |
+| AI: chat send (side panel) | Vanilla JS `fetch` → `StreamingHttpResponse` (SSE). Server streams `text_delta` events token-by-token, then `done` event with linkified text + `changes_applied_pks`. Client appends user bubble immediately, streams text into assistant bubble, applies tool-call changes on `done`, dispatches `pendingChanged` event to body |
 | AI: accept pending item | `hx-post` → clears pending fields → returns normal item partial; fires `HX-Trigger: pendingChanged` |
 | AI: reject pending item | `hx-post` → restores original or deletes item → returns item partial or empty; fires `HX-Trigger: pendingChanged` |
 | AI: accept all pending | `hx-post` → bulk clears pending on all items in exhibit → returns section list + clears banner |
 | AI: reject all pending | `hx-post` → bulk restores/deletes all pending items → returns section list + clears banner |
-| Change trade status | `hx-patch` → updates Trade.status → returns updated dashboard row |
+| Dashboard filter/group/sort | `hx-get` with URL params (`status[]`, `assigned_to[]`, `group`, `sort`, `dir`) → returns `#dashboard-content` partial; `hx-push-url="true"` keeps URL bookmarkable |
+| Dashboard inline status/assign (grouped mode) | `hx-post` with current filter+group state in `hx-vals` → returns full `#trades-table-body` innerHTML so row moves to correct group immediately; fires `HX-Trigger: statsChanged` |
+| Change trade status | `hx-post` → updates Trade.status → returns updated dashboard row (flat mode) or full tbody (grouped mode) |
 | Final review initiation | `hx-post` → runs checks → returns review checklist partial |
 | Resolve note | `hx-patch` → updates Note status/resolution → returns updated note card |
 
@@ -987,7 +1001,6 @@ Use this section as the backlog. When starting new work, pull items into a versi
 
 #### AI
 
-- [ ] **Streaming Responses** — Stream chat and scope generation via SSE instead of waiting 5-15s
 - [ ] **Differentiated Error Messages** — Distinguish rate-limited, context-too-long, timeout, and unavailable errors
 - [ ] **Cost Visibility Dashboard** — Admin view showing AI usage metrics from `AIRequestLog`
 - [ ] **AI Result Caching** — Hash-based caching of read-only AI results with TTL and invalidation on exhibit writes

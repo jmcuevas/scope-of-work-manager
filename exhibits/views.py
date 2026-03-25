@@ -3,7 +3,10 @@ from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from ai_services.services import AIDisabledError, AIServiceError, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_chat_title, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items, section_ai_action
+import json as _json
+
+from django.http import StreamingHttpResponse
+from ai_services.services import AIDisabledError, AIServiceError, _tool_calls_to_changes, chat_with_exhibit, check_exhibit_completeness, convert_note_to_scope, expand_scope_item, generate_chat_title, generate_scope_from_description, generate_scope_item, rewrite_scope_item, rewrite_section_items, section_ai_action, stream_chat_with_exhibit
 from django.conf import settings
 from django.utils import timezone
 from notes.forms import NoteForm
@@ -1434,16 +1437,22 @@ def ai_chat_delete(request, pk, session_pk):
 @login_required
 @require_POST
 def ai_chat_send(request, pk):
+    """
+    Streams the chat response as Server-Sent Events.
+
+    SSE event types:
+        text_delta  — one text token {'type': 'text_delta', 'content': str}
+        error       — failure        {'type': 'error', 'message': str}
+        done        — final event    {'type': 'done', 'full_text': str,
+                                      'changes_applied_pks': list,
+                                      'new_session_pk': int|null}
+    """
     from ai_services.models import ChatMessage, ChatSession
 
     exhibit = _company_exhibit_or_404(pk, request.user)
     user_message = request.POST.get('message', '').strip()
 
-    if not user_message:
-        from django.http import HttpResponse
-        return HttpResponse('')
-
-    # Build context prefix from selected chips
+    # Build context prefix from selected chips (unchanged logic)
     context_section_pks = request.POST.getlist('context_section_pks')
     context_note_pks = request.POST.getlist('context_note_pks')
     context_parts = []
@@ -1456,73 +1465,80 @@ def ai_chat_send(request, pk):
     if context_parts:
         user_message = '[Context: ' + '; '.join(context_parts) + ']\n\n' + user_message
 
-    # Route to session — create lazily on first send if no session exists yet
-    session_pk = request.POST.get('session_pk')
-    new_session_pk = None
-    if session_pk:
-        session = get_object_or_404(ChatSession, pk=session_pk, exhibit=exhibit, user=request.user)
-    else:
-        session = ChatSession.objects.create(exhibit=exhibit, user=request.user)
-        new_session_pk = session.pk
+    # Capture for generator closure
+    session_pk_param = request.POST.get('session_pk')
+    user = request.user
 
-    # Save user message
-    ChatMessage.objects.create(
-        session=session, role=ChatMessage.Role.USER,
-        content=user_message, user=request.user,
-    )
-
-    # Build conversation from DB
-    conversation = list(
-        session.messages.order_by('created_at').values_list('role', 'content')
-    )
-    conversation = [{'role': role, 'content': content} for role, content in conversation]
-
-    assistant_message = None
-    changes_applied_pks = []
-    error = False
-
-    try:
-        result = chat_with_exhibit(exhibit, conversation)
-        if result:
-            assistant_message = result.get('message', '').strip()
-            proposed_changes = result.get('proposed_changes', [])
-            if proposed_changes:
-                _count, changes_applied_pks = _apply_proposed_changes(exhibit, proposed_changes, request.user)
-    except (AIDisabledError, AIServiceError) as e:
-        assistant_message = f'Sorry, I ran into an error: {e}'
-        error = True
-
-    changes_applied = len(changes_applied_pks)
-
-    if not assistant_message:
-        if changes_applied:
-            assistant_message = f'Done — {changes_applied} change{"s" if changes_applied != 1 else ""} proposed for your review.'
+    def _event_stream():
+        # Route to existing session or create a new one
+        new_session_pk = None
+        if session_pk_param:
+            session = get_object_or_404(ChatSession, pk=session_pk_param, exhibit=exhibit, user=user)
         else:
-            assistant_message = 'Sorry, I could not generate a response. Please try again.'
+            session = ChatSession.objects.create(exhibit=exhibit, user=user)
+            new_session_pk = session.pk
 
-    # Save assistant message
-    ChatMessage.objects.create(
-        session=session, role=ChatMessage.Role.ASSISTANT,
-        content=assistant_message,
-        changes_applied_pks=changes_applied_pks,
-    )
+        if not user_message:
+            yield f"data: {_json.dumps({'type': 'done', 'full_text': '', 'changes_applied_pks': [], 'new_session_pk': new_session_pk})}\n\n"
+            return
 
-    # Auto-title the session from the first user message (once only)
-    if not session.title:
-        session.title = generate_chat_title(user_message)
-        session.save(update_fields=['title', 'updated_at'])
+        # Save user message
+        ChatMessage.objects.create(
+            session=session, role=ChatMessage.Role.USER,
+            content=user_message, user=user,
+        )
 
-    ctx = {
-        'user_message': user_message,
-        'assistant_message': assistant_message,
-        'changes_applied': changes_applied,
-        'changes_applied_pks': changes_applied_pks,
-        'error': error,
-        'new_session_pk': new_session_pk,
-    }
-    if new_session_pk:
-        ctx.update(_session_title_context(exhibit, session, request.user))
-    response = render(request, 'exhibits/partials/ai_chat_messages.html', ctx)
-    if changes_applied:
-        response['HX-Trigger'] = 'pendingChanged'
-    return response
+        # Build conversation from DB
+        conversation = [
+            {'role': role, 'content': content}
+            for role, content in session.messages.order_by('created_at').values_list('role', 'content')
+        ]
+
+        full_text = ''
+        raw_tool_calls = []
+        had_error = False
+
+        for event_type, event_data in stream_chat_with_exhibit(exhibit, conversation):
+            if event_type == 'text_delta':
+                full_text += event_data
+                yield f"data: {_json.dumps({'type': 'text_delta', 'content': event_data})}\n\n"
+            elif event_type == 'complete':
+                full_text = event_data['full_text']
+                raw_tool_calls = event_data['tool_calls']
+            elif event_type == 'error':
+                had_error = True
+                full_text = f"Sorry, I ran into an error: {event_data}"
+                yield f"data: {_json.dumps({'type': 'error', 'message': full_text})}\n\n"
+
+        # Apply tool-call changes after stream completes
+        changes_applied_pks = []
+        if raw_tool_calls and not had_error:
+            proposed = _tool_calls_to_changes(raw_tool_calls)
+            if proposed:
+                _count, changes_applied_pks = _apply_proposed_changes(exhibit, proposed, user)
+
+        if not full_text:
+            n = len(changes_applied_pks)
+            full_text = (
+                f'Done — {n} change{"s" if n != 1 else ""} proposed for your review.'
+                if changes_applied_pks else 'Sorry, I could not generate a response. Please try again.'
+            )
+
+        # Save assistant message
+        ChatMessage.objects.create(
+            session=session, role=ChatMessage.Role.ASSISTANT,
+            content=full_text,
+            changes_applied_pks=changes_applied_pks,
+        )
+
+        # Auto-title session from first user message
+        if not session.title:
+            session.title = generate_chat_title(user_message)
+            session.save(update_fields=['title', 'updated_at'])
+
+        yield f"data: {_json.dumps({'type': 'done', 'full_text': full_text, 'changes_applied_pks': changes_applied_pks, 'new_session_pk': new_session_pk})}\n\n"
+
+    resp = StreamingHttpResponse(_event_stream(), content_type='text/event-stream')
+    resp['Cache-Control'] = 'no-cache'
+    resp['X-Accel-Buffering'] = 'no'
+    return resp
