@@ -1,0 +1,24 @@
+{% if trade_groups %}
+  {% for group_name, group_trades in trade_groups.items %}
+    <tr class="group-header cursor-pointer select-none"
+        data-group-id="{{ forloop.counter }}"
+        data-collapsed="false">
+      <td colspan="4" class="px-5 py-2 bg-gray-100 border-t border-b border-gray-200">
+        <div class="flex items-center gap-2">
+          <span class="group-arrow text-gray-400 text-xs font-bold">▼</span>
+          <span class="text-xs font-semibold text-gray-600 uppercase tracking-wide">{{ group_name }}</span>
+          <span class="inline-flex items-center justify-center min-w-[20px] px-1.5 py-0.5 bg-gray-300 text-gray-700 rounded text-xs font-semibold">
+            {{ group_trades|length }}
+          </span>
+        </div>
+      </td>
+    </tr>
+    {% for trade in group_trades %}
+      {% include "projects/partials/trade_row.html" with group_row_id=forloop.parentloop.counter %}
+    {% endfor %}
+  {% endfor %}
+{% else %}
+  {% for trade in trades %}
+    {% include "projects/partials/trade_row.html" %}
+  {% endfor %}
+{% endif %}

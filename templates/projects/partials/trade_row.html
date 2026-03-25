@@ -1,5 +1,6 @@
 {% load trade_tags humanize %}
-<tr class="hover:bg-gray-50 transition-colors" id="trade-{{ trade.pk }}">
+<tr class="hover:bg-gray-50 transition-colors" id="trade-{{ trade.pk }}"
+    {% if group_row_id %}data-group-id="{{ group_row_id }}"{% endif %}>
 
   <!-- Trade -->
   <td class="px-5 py-3">
@@ -18,8 +19,14 @@
   <td class="px-5 py-3">
     <select name="status"
             hx-post="{% url 'projects:trade_update_status' trade.project.pk trade.pk %}"
+            {% if group_by %}
+            hx-target="#trades-table-body"
+            hx-swap="innerHTML"
+            {% else %}
             hx-target="#trade-{{ trade.pk }}"
             hx-swap="outerHTML"
+            {% endif %}
+            hx-vals='{"group_by": "{{ group_by }}", "sort_by": "{{ sort_by }}", "sort_dir": "{{ sort_dir }}", "filter_status": "{{ active_status_filters|join:"," }}", "filter_assigned_to": "{{ active_assigned_to_filters|join:"," }}"}'
             class="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500 {{ trade.status|status_badge_class }}">
       {% for value, label in trade.Status.choices %}
         <option value="{{ value }}" {% if trade.status == value %}selected{% endif %}>{{ label }}</option>
@@ -31,8 +38,14 @@
   <td class="px-5 py-3">
     <select name="assigned_to"
             hx-post="{% url 'projects:trade_update_assign' trade.project.pk trade.pk %}"
+            {% if group_by %}
+            hx-target="#trades-table-body"
+            hx-swap="innerHTML"
+            {% else %}
             hx-target="#trade-{{ trade.pk }}"
             hx-swap="outerHTML"
+            {% endif %}
+            hx-vals='{"group_by": "{{ group_by }}", "sort_by": "{{ sort_by }}", "sort_dir": "{{ sort_dir }}", "filter_status": "{{ active_status_filters|join:"," }}", "filter_assigned_to": "{{ active_assigned_to_filters|join:"," }}"}'
             class="border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500">
       <option value="">Unassigned</option>
       {% for user in company_users %}
@@ -42,6 +55,5 @@
       {% endfor %}
     </select>
   </td>
-
 
 </tr>

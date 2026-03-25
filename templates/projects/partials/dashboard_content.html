@@ -1,0 +1,62 @@
+{% include "projects/partials/stats_bar.html" %}
+
+{% include "projects/partials/filter_bar.html" %}
+
+{% if trades %}
+<div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-5 py-3 font-medium text-gray-600">
+          <a hx-get="{{ sort_urls.trade }}" hx-target="#dashboard-content" hx-push-url="true"
+             class="inline-flex items-center gap-1 hover:text-gray-900 cursor-pointer">
+            Trade
+            {% if sort_by == 'trade' %}<span class="text-xs text-primary-500">{% if sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>{% endif %}
+          </a>
+        </th>
+        <th class="text-right px-5 py-3 font-medium text-gray-600">
+          <a hx-get="{{ sort_urls.budget }}" hx-target="#dashboard-content" hx-push-url="true"
+             class="inline-flex items-center justify-end gap-1 hover:text-gray-900 cursor-pointer w-full">
+            Budget
+            {% if sort_by == 'budget' %}<span class="text-xs text-primary-500">{% if sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>{% endif %}
+          </a>
+        </th>
+        <th class="text-left px-5 py-3 font-medium text-gray-600">
+          <a hx-get="{{ sort_urls.status }}" hx-target="#dashboard-content" hx-push-url="true"
+             class="inline-flex items-center gap-1 hover:text-gray-900 cursor-pointer">
+            Status
+            {% if sort_by == 'status' %}<span class="text-xs text-primary-500">{% if sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>{% endif %}
+          </a>
+        </th>
+        <th class="text-left px-5 py-3 font-medium text-gray-600">
+          <a hx-get="{{ sort_urls.assigned_to }}" hx-target="#dashboard-content" hx-push-url="true"
+             class="inline-flex items-center gap-1 hover:text-gray-900 cursor-pointer">
+            Bid Manager
+            {% if sort_by == 'assigned_to' %}<span class="text-xs text-primary-500">{% if sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>{% endif %}
+          </a>
+        </th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100" id="trades-table-body">
+      {% include "projects/partials/trades_table_body.html" %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+<!-- Empty state -->
+<div class="bg-white rounded-lg border border-gray-200 border-dashed py-16 text-center">
+  {% if active_status_filters or active_assigned_to_filters %}
+    <p class="text-gray-400 text-sm mb-2">No trades match the current filters.</p>
+    <a href="{% url 'projects:dashboard' project.pk %}"
+       hx-get="{% url 'projects:dashboard' project.pk %}" hx-target="#dashboard-content" hx-push-url="true"
+       class="text-primary-600 hover:underline text-sm">Clear filters</a>
+  {% else %}
+    <p class="text-gray-400 text-sm mb-4">No trades yet. Import from your estimate or add them manually.</p>
+    <a href="{% url 'projects:trade_add' project.pk %}"
+       class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors">
+      + Add Trade
+    </a>
+  {% endif %}
+</div>
+{% endif %}

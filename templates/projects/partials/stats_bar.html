@@ -1,6 +1,6 @@
 {% with counts=status_counts %}
 <div id="stats-bar"
-     hx-get="{% url 'projects:stats' project.pk %}"
+     hx-get="{% url 'projects:stats' project.pk %}{% if stats_query_string %}?{{ stats_query_string }}{% endif %}"
      hx-trigger="statsChanged"
      hx-target="#stats-bar"
      hx-swap="outerHTML"

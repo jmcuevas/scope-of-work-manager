@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count
@@ -8,6 +10,213 @@ from .forms import ProjectForm, TradeForm
 def company_project_or_404(pk, user):
     return get_object_or_404(Project, pk=pk, company=user.company)
 
+
+# ---------------------------------------------------------------------------
+# Filtering / sorting / grouping helpers
+# ---------------------------------------------------------------------------
+
+SORT_FIELD_MAP = {
+    'trade': 'csi_trade__csi_code',
+    'budget': 'budget',
+    'status': 'status',
+    'assigned_to': 'assigned_to__first_name',
+}
+
+
+def _apply_trade_filters(trades, status_filters, assigned_to_filters):
+    if status_filters:
+        trades = trades.filter(status__in=status_filters)
+    if assigned_to_filters:
+        from django.db.models import Q
+        q = Q()
+        pks = [v for v in assigned_to_filters if v != 'unassigned']
+        if pks:
+            q |= Q(assigned_to_id__in=pks)
+        if 'unassigned' in assigned_to_filters:
+            q |= Q(assigned_to__isnull=True)
+        trades = trades.filter(q)
+    return trades
+
+
+def _apply_trade_sort(trades, sort_by, sort_dir):
+    field = SORT_FIELD_MAP.get(sort_by, 'order')
+    if sort_dir == 'desc':
+        field = f'-{field}'
+    return trades.order_by(field)
+
+
+def _build_trade_groups(trades, group_by):
+    from collections import OrderedDict
+    groups = OrderedDict()
+    if group_by == 'status':
+        for s in Trade.Status:
+            groups[s.label] = []
+        for trade in trades:
+            groups[Trade.Status(trade.status).label].append(trade)
+        return {k: v for k, v in groups.items() if v}
+    elif group_by == 'assigned_to':
+        for trade in trades:
+            if trade.assigned_to:
+                key = trade.assigned_to.get_full_name() or trade.assigned_to.email
+            else:
+                key = 'Unassigned'
+            groups.setdefault(key, []).append(trade)
+    return groups
+
+
+def _build_sort_urls(base_url, filter_params, sort_by, sort_dir):
+    """Return a dict of {field: url} with toggled sort for each sortable column."""
+    urls = {}
+    for field in ['trade', 'budget', 'status', 'assigned_to']:
+        params = dict(filter_params)  # shallow copy; lists preserved
+        params['sort'] = field
+        params['dir'] = 'desc' if (sort_by == field and sort_dir == 'asc') else 'asc'
+        urls[field] = base_url + '?' + urlencode(params, doseq=True)
+    return urls
+
+
+def _dashboard_context(request, project):
+    """Build the shared context dict for the buyout dashboard."""
+    from core.models import User
+
+    # Parse filter/sort/group params
+    status_filters = [s for s in request.GET.getlist('status') if s]
+    assigned_to_filters = [s for s in request.GET.getlist('assigned_to') if s]
+    sort_by = request.GET.get('sort', '')
+    sort_dir = request.GET.get('dir', 'asc')
+    group_by = request.GET.get('group', '')
+
+    trades = (
+        project.trades
+        .select_related('csi_trade', 'assigned_to')
+    )
+    trades = _apply_trade_filters(trades, status_filters, assigned_to_filters)
+    if sort_by:
+        trades = _apply_trade_sort(trades, sort_by, sort_dir)
+    else:
+        trades = trades.order_by('order', 'csi_trade__csi_code')
+
+    # Status counts from filtered set
+    status_counts = {s.value: 0 for s in Trade.Status}
+    for trade in trades:
+        if trade.status in status_counts:
+            status_counts[trade.status] += 1
+
+    trade_groups = _build_trade_groups(trades, group_by) if group_by else None
+
+    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
+
+    # Build params dict for sort URL generation (excludes sort/dir, added by helper)
+    filter_params = {}
+    if status_filters:
+        filter_params['status'] = status_filters
+    if assigned_to_filters:
+        filter_params['assigned_to'] = assigned_to_filters
+    if group_by:
+        filter_params['group'] = group_by
+
+    sort_urls = _build_sort_urls(request.path, filter_params, sort_by, sort_dir)
+
+    # Labels for active filter chips
+    active_status_filter_items = [
+        {'value': s, 'label': Trade.Status(s).label}
+        for s in status_filters
+        if s in Trade.Status.values
+    ]
+    active_assigned_to_filter_items = []
+    for v in assigned_to_filters:
+        if v == 'unassigned':
+            active_assigned_to_filter_items.append({'value': 'unassigned', 'label': 'Unassigned'})
+        else:
+            matched = company_users.filter(pk=v).first()
+            if matched:
+                active_assigned_to_filter_items.append({'value': v, 'label': matched.get_full_name() or matched.email})
+
+    return {
+        'project': project,
+        'trades': trades,
+        'trade_groups': trade_groups,
+        'status_counts': status_counts,
+        'total_trades': trades.count(),
+        'company_users': company_users,
+        # Filter state (for template rendering)
+        'active_status_filters': status_filters,
+        'active_assigned_to_filters': assigned_to_filters,
+        'sort_by': sort_by,
+        'sort_dir': sort_dir,
+        'group_by': group_by,
+        'sort_urls': sort_urls,
+        'active_status_filter_items': active_status_filter_items,
+        'active_assigned_to_filter_items': active_assigned_to_filter_items,
+        'trade_status_choices': Trade.Status.choices,
+        'stats_query_string': urlencode(
+            {k: v for k, v in [('status', status_filters), ('assigned_to', assigned_to_filters)] if v},
+            doseq=True,
+        ),
+    }
+
+
+def _inline_update_response(request, trade, project):
+    """
+    After an inline status/assignment update, return either:
+    - The grouped table body (when group_by is active)
+    - The single trade row (flat mode)
+    """
+    from core.models import User
+
+    group_by = request.POST.get('group_by', '')
+    sort_by = request.POST.get('sort_by', '')
+    sort_dir = request.POST.get('sort_dir', 'asc')
+    filter_status_raw = request.POST.get('filter_status', '')
+    filter_assigned_to_raw = request.POST.get('filter_assigned_to', '')
+
+    company_users = User.objects.filter(company=project.company).order_by('first_name', 'email')
+
+    if group_by:
+        # Rebuild filtered/sorted/grouped trades and return full table body
+        status_filters = [s for s in filter_status_raw.split(',') if s]
+        assigned_to_filters = [s for s in filter_assigned_to_raw.split(',') if s]
+        trades = project.trades.select_related('csi_trade', 'assigned_to')
+        trades = _apply_trade_filters(trades, status_filters, assigned_to_filters)
+        if sort_by:
+            trades = _apply_trade_sort(trades, sort_by, sort_dir)
+        else:
+            trades = trades.order_by('order', 'csi_trade__csi_code')
+        trade_groups = _build_trade_groups(trades, group_by)
+        ctx = {
+            'project': project,
+            'trades': trades,
+            'trade_groups': trade_groups,
+            'company_users': company_users,
+            'active_status_filters': status_filters,
+            'active_assigned_to_filters': assigned_to_filters,
+            'sort_by': sort_by,
+            'sort_dir': sort_dir,
+            'group_by': group_by,
+        }
+        response = render(request, 'projects/partials/trades_table_body.html', ctx)
+        response['HX-Trigger'] = 'statsChanged'
+        return response
+
+    # Flat mode: return single row
+    assigned_to_filters = [s for s in filter_assigned_to_raw.split(',') if s]
+    ctx = {
+        'trade': trade,
+        'company_users': company_users,
+        'group_by': group_by,
+        'sort_by': sort_by,
+        'sort_dir': sort_dir,
+        'active_status_filters': [],
+        'active_assigned_to_filters': assigned_to_filters,
+    }
+    response = render(request, 'projects/partials/trade_row.html', ctx)
+    response['HX-Trigger'] = 'statsChanged'
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Views
+# ---------------------------------------------------------------------------
 
 @login_required
 def project_list(request):
@@ -58,15 +267,6 @@ def trade_add(request, pk):
     return render(request, 'projects/trade_add.html', {'project': project, 'form': form})
 
 
-def _build_status_counts(project):
-    trades = project.trades.all()
-    counts = {s.value: 0 for s in Trade.Status}
-    for t in trades:
-        if t.status in counts:
-            counts[t.status] += 1
-    return counts, trades.count()
-
-
 @login_required
 def trade_update_status(request, pk, trade_pk):
     project = company_project_or_404(pk, request.user)
@@ -75,21 +275,34 @@ def trade_update_status(request, pk, trade_pk):
     if new_status in Trade.Status.values:
         trade.status = new_status
         trade.save()
-    from core.models import User
-    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
-    response = render(request, 'projects/partials/trade_row.html', {'trade': trade, 'company_users': company_users})
-    response['HX-Trigger'] = 'statsChanged'
-    return response
+    return _inline_update_response(request, trade, project)
 
 
 @login_required
 def project_stats(request, pk):
     project = company_project_or_404(pk, request.user)
-    status_counts, total_trades = _build_status_counts(project)
+    status_filters = [s for s in request.GET.getlist('status') if s]
+    assigned_to_filters = [s for s in request.GET.getlist('assigned_to') if s]
+
+    trades = project.trades.all()
+    trades = _apply_trade_filters(trades, status_filters, assigned_to_filters)
+
+    status_counts = {s.value: 0 for s in Trade.Status}
+    for trade in trades:
+        if trade.status in status_counts:
+            status_counts[trade.status] += 1
+
+    qs = urlencode(
+        {k: v for k, v in [('status', status_filters), ('assigned_to', assigned_to_filters)] if v},
+        doseq=True,
+    )
     return render(request, 'projects/partials/stats_bar.html', {
         'project': project,
         'status_counts': status_counts,
-        'total_trades': total_trades,
+        'total_trades': trades.count(),
+        'active_status_filters': status_filters,
+        'active_assigned_to_filters': assigned_to_filters,
+        'stats_query_string': qs,
     })
 
 
@@ -104,8 +317,7 @@ def trade_update_assign(request, pk, trade_pk):
     else:
         trade.assigned_to = None
     trade.save()
-    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
-    return render(request, 'projects/partials/trade_row.html', {'trade': trade, 'company_users': company_users})
+    return _inline_update_response(request, trade, project)
 
 
 @login_required
@@ -127,33 +339,14 @@ def project_edit(request, pk):
 
 @login_required
 def project_dashboard(request, pk):
-    from core.models import User
     from notes.models import Note
     project = company_project_or_404(pk, request.user)
-    trades = (
-        project.trades
-        .select_related('csi_trade', 'assigned_to')
-        .order_by('order', 'csi_trade__csi_code')
-    )
-    company_users = User.objects.filter(company=request.user.company).order_by('first_name', 'email')
-
-    # Stats
-    from .models import Trade as TradeModel
-    status_counts = {s.value: 0 for s in TradeModel.Status}
-    for trade in trades:
-        if trade.status in status_counts:
-            status_counts[trade.status] += 1
-
-    open_question_count = Note.objects.filter(
+    context = _dashboard_context(request, project)
+    context['open_question_count'] = Note.objects.filter(
         project=project,
         status=Note.Status.OPEN,
     ).count()
 
-    return render(request, 'projects/dashboard.html', {
-        'project': project,
-        'trades': trades,
-        'status_counts': status_counts,
-        'total_trades': trades.count(),
-        'company_users': company_users,
-        'open_question_count': open_question_count,
-    })
+    if request.headers.get('HX-Request'):
+        return render(request, 'projects/partials/dashboard_content.html', context)
+    return render(request, 'projects/dashboard.html', context)

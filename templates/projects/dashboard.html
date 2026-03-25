@@ -40,7 +40,7 @@
 {% block content %}
 <div class="max-w-5xl">
 
-  <!-- Page header -->
+  <!-- Page header (static — not replaced by HTMX) -->
   <div class="flex items-center justify-between mb-6">
     <div>
       <h1 class="text-2xl font-semibold text-gray-800">Buyout Dashboard</h1>
@@ -65,51 +65,74 @@
     </div>
   </div>
 
-  <!-- Stats bar -->
-  {% include "projects/partials/stats_bar.html" %}
-
-  <!-- Trades table -->
-  {% if trades %}
-  <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-    <table class="w-full text-sm">
-      <thead class="bg-gray-50 border-b border-gray-200">
-        <tr>
-          <th class="text-left px-5 py-3 font-medium text-gray-600">Trade</th>
-          <th class="text-right px-5 py-3 font-medium text-gray-600">Budget</th>
-          <th class="text-left px-5 py-3 font-medium text-gray-600">Status</th>
-          <th class="text-left px-5 py-3 font-medium text-gray-600">Bid Manager</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-gray-100" id="trades-table">
-        {% for trade in trades %}
-        {% include "projects/partials/trade_row.html" with trade=trade %}
-        {% endfor %}
-      </tbody>
-    </table>
+  <!-- HTMX-replaceable area: stats bar + filter bar + trades table -->
+  <div id="dashboard-content">
+    {% include "projects/partials/dashboard_content.html" %}
   </div>
-
-  {% else %}
-  <!-- Empty state -->
-  <div class="bg-white rounded-lg border border-gray-200 border-dashed py-16 text-center">
-    <p class="text-gray-400 text-sm mb-4">No trades yet. Import from your estimate or add them manually.</p>
-    <div class="flex items-center justify-center gap-3">
-      <a href="{% url 'projects:trade_add' project.pk %}"
-         class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors">
-        + Add Trade
-      </a>
-    </div>
-  </div>
-  {% endif %}
 
 </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+  // Stats bar refresh on inline row updates
   document.body.addEventListener('htmx:afterRequest', function(evt) {
     if (evt.detail.xhr && evt.detail.xhr.getResponseHeader('HX-Trigger') === 'statsChanged') {
       htmx.trigger(document.getElementById('stats-bar'), 'statsChanged');
     }
   });
+
+  // Group collapse / expand with localStorage persistence
+  (function () {
+    var projectPk = '{{ project.pk }}';
+
+    function collapseKey(groupId) {
+      return 'group-collapse-' + projectPk + '-' + groupId;
+    }
+
+    // Select only trade rows for a group, never the header itself
+    function groupRows(groupId) {
+      return document.querySelectorAll('[data-group-id="' + groupId + '"]:not(.group-header)');
+    }
+
+    function applyCollapseState() {
+      document.querySelectorAll('.group-header').forEach(function (header) {
+        var groupId = header.dataset.groupId;
+        var collapsed = localStorage.getItem(collapseKey(groupId)) === 'true';
+        var arrow = header.querySelector('.group-arrow');
+        if (collapsed) {
+          header.dataset.collapsed = 'true';
+          if (arrow) arrow.textContent = '▶';
+          groupRows(groupId).forEach(function (r) { r.style.display = 'none'; });
+        } else {
+          header.dataset.collapsed = 'false';
+          if (arrow) arrow.textContent = '▼';
+          groupRows(groupId).forEach(function (r) { r.style.display = ''; });
+        }
+      });
+    }
+
+    document.body.addEventListener('click', function (e) {
+      var header = e.target.closest('.group-header');
+      if (!header) return;
+      var groupId = header.dataset.groupId;
+      var isCollapsed = header.dataset.collapsed === 'true';
+      var arrow = header.querySelector('.group-arrow');
+      if (isCollapsed) {
+        groupRows(groupId).forEach(function (r) { r.style.display = ''; });
+        header.dataset.collapsed = 'false';
+        if (arrow) arrow.textContent = '▼';
+        localStorage.setItem(collapseKey(groupId), 'false');
+      } else {
+        groupRows(groupId).forEach(function (r) { r.style.display = 'none'; });
+        header.dataset.collapsed = 'true';
+        if (arrow) arrow.textContent = '▶';
+        localStorage.setItem(collapseKey(groupId), 'true');
+      }
+    });
+
+    applyCollapseState();
+    document.body.addEventListener('htmx:afterSwap', applyCollapseState);
+  })();
 </script>
 {% endblock %}
